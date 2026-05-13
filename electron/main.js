@@ -2,7 +2,6 @@ const { app, BrowserWindow, ipcMain, dialog, protocol, net } = require('electron
 // Prevent Linux kernel sandbox crashes on startup
 app.commandLine.appendSwitch('no-sandbox');
 // Conserve memory & CPU footprint for slow processors / low memory environments
-app.commandLine.appendSwitch('js-flags', '--max-old-space-size=512'); // Limit JS heap size
 app.commandLine.appendSwitch('disable-dev-shm-usage'); // Mitigate low /dev/shm memory crashes
 app.commandLine.appendSwitch('enable-low-end-device-mode'); // Chromium's built-in optimizations for low-end hardware
 const path = require('path');

@@ -13,9 +13,6 @@ release/
 *.db
 *.log
 
-# Backups
-python_backup/
-
 # OS and editor files
 .DS_Store
 Thumbs.db
