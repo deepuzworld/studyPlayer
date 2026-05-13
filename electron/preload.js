@@ -6,6 +6,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getVideoState: (path) => ipcRenderer.invoke('get-video-state', path),
   updateProgress: (path, pos, dur, done) => ipcRenderer.invoke('update-progress', path, pos, dur, done),
   getCourseStats: (id) => ipcRenderer.invoke('get-course-stats', id),
+  getCourseProgress: (id) => ipcRenderer.invoke('get-course-progress', id),
   runCode: (code, filename, dirPath) => ipcRenderer.invoke('run-code', code, filename, dirPath),
   saveCode: (code, filename, dirPath) => ipcRenderer.invoke('save-code', code, filename, dirPath),
   

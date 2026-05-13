@@ -120,6 +120,10 @@ app.whenReady().then(() => {
     return backend.getCourseStats(courseId);
   });
 
+  ipcMain.handle('get-course-progress', (event, courseId) => {
+    return backend.getCourseVideosProgress(courseId);
+  });
+
   ipcMain.handle('run-code', async (event, code, filename, dirPath) => {
     return await backend.runCode(code, filename, dirPath);
   });

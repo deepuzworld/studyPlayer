@@ -23,6 +23,7 @@ import {
   ChevronRight,
   Trophy,
   CheckCircle2,
+  Lock,
   X,
   Square,
   Minus,
@@ -102,7 +103,8 @@ const simulationApi = {
   }),
   minimizeWindow: () => console.log("Sim minimize triggered"),
   maximizeWindow: () => console.log("Sim maximize triggered"),
-  closeWindow: () => console.log("Sim close triggered")
+  closeWindow: () => console.log("Sim close triggered"),
+  getCourseProgress: async () => ({})
 };
 
 const isNativeApp = !!window.electronAPI;
@@ -121,6 +123,7 @@ function App() {
   // Core dynamic course states
   const [courseData, setCourseData] = useState(null);
   const [stats, setStats] = useState({ total_videos: 0, completed_videos: 0 });
+  const [videoCompletionMap, setVideoCompletionMap] = useState({}); // Cache for quick curriculum locking lookups
   const [activeVideo, setActiveVideo] = useState(null);
   const [isCollapsed, setIsCollapsed] = useState({});
   const [recentWorkspaces, setRecentWorkspaces] = useState([]);
@@ -207,12 +210,13 @@ function App() {
     }
   }, [activeVideo, appMode]);
 
-  // Load dynamic stats
+  // Load dynamic stats & curriculum progression status maps
   useEffect(() => {
     if (courseData?.courseId) {
       api.getCourseStats(courseData.courseId).then(setStats);
+      api.getCourseProgress(courseData.courseId).then(res => setVideoCompletionMap(res || {}));
     }
-  }, [courseData, activeVideo]);
+  }, [courseData, activeVideo, appMode]);
 
   // Robust Video Track Loading & Auto-playback handling
   useEffect(() => {
@@ -229,19 +233,21 @@ function App() {
       const startPos = (activeVideo.last_position_ms || 0) / 1000;
       videoRef.current.playbackRate = playbackRate;
 
+      const el = videoRef.current;
       const handleLoaded = () => {
-        videoRef.current.currentTime = startPos;
-        videoRef.current.play().catch(() => {});
+        if (el.currentTime < startPos) {
+          el.currentTime = startPos;
+        }
+        el.play().catch(() => {});
       };
 
-      if (videoRef.current.readyState >= 1) {
+      if (el.readyState >= 2) {
         handleLoaded();
       } else {
-        videoRef.current.onloadedmetadata = handleLoaded;
+        el.addEventListener('loadeddata', handleLoaded);
       }
 
       // PiP state listeners to enable adaptive container layouts
-      const el = videoRef.current;
       const onEnter = () => setIsPipActive(true);
       const onLeave = () => setIsPipActive(false);
 
@@ -249,6 +255,7 @@ function App() {
       el.addEventListener('leavepictureinpicture', onLeave);
 
       return () => {
+        el.removeEventListener('loadeddata', handleLoaded);
         el.removeEventListener('enterpictureinpicture', onEnter);
         el.removeEventListener('leavepictureinpicture', onLeave);
       };
@@ -372,6 +379,31 @@ function App() {
     }
   };
 
+  // Instant programmatic progress saver & mapper synchronization
+  const saveCurrentProgressInstantly = (forceCompleted = false) => {
+    if (!activeVideo || !videoRef.current) return;
+    const cur = videoRef.current.currentTime;
+    const dur = videoRef.current.duration || 0;
+    if (dur > 0) {
+      const isComp = forceCompleted || (cur / dur > 0.9);
+      api.updateProgress(activeVideo.path, Math.floor(cur * 1000), Math.floor(dur * 1000), isComp);
+      
+      // Ensure local map state tracks it seamlessly to update sidebar visuals instantly
+      if (isComp) {
+        setVideoCompletionMap(prev => ({ ...prev, [activeVideo.path]: 1 }));
+      }
+    }
+  };
+
+  // Auto-persists current playback frame when component is destroyed or switches tracks
+  useEffect(() => {
+    return () => {
+      if (activeVideo) {
+        saveCurrentProgressInstantly();
+      }
+    };
+  }, [activeVideo]);
+
   const selectVideo = async (video) => {
     // Network streams skip SQLite lookups
     const isNetwork = video.path.startsWith('http://') || video.path.startsWith('https://');
@@ -435,8 +467,9 @@ function App() {
     const curSec = Math.floor(cur);
     if (curSec % 3 === 0 && curSec !== lastProgressUpdateRef.current && activeVideo && dur > 0) {
       lastProgressUpdateRef.current = curSec;
+      saveCurrentProgressInstantly();
+      
       const comp = cur / dur > 0.9;
-      api.updateProgress(activeVideo.path, Math.floor(cur * 1000), Math.floor(dur * 1000), comp);
       if (comp && activeVideo.is_completed === 0) {
         setActiveVideo(prev => ({ ...prev, is_completed: 1 }));
       }
@@ -854,8 +887,9 @@ function App() {
 
                     <div className="sidebar-active-content scroll-pane">
                       {sidebarTab === 'contents' && (
-                        !courseData ? <div className="empty-state">Course scanning...</div> : (
-                          Object.entries(courseData.structure).map(([modName, videos]) => (
+                        !courseData ? <div className="empty-state">Course scanning...</div> : (() => {
+                          const flatList = getFlatVideos();
+                          return Object.entries(courseData.structure).map(([modName, videos]) => (
                             <div key={modName} className="module-item">
                               <div className="section-header" onClick={() => setIsCollapsed(p => ({ ...p, [modName]: !p[modName] }))}>
                                 {isCollapsed[modName] ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
@@ -865,19 +899,31 @@ function App() {
                                 <div className="video-list">
                                   {videos.map((v) => {
                                     const isActive = activeVideo?.path === v.path;
+                                    const flatIdx = flatList.findIndex(x => x.path === v.path);
+                                    // A video is unlocked if it's the very first or the previous video is marked complete
+                                    const isUnlocked = flatIdx === 0 || !!videoCompletionMap[flatList[flatIdx - 1].path];
+                                    const isCompleted = !!videoCompletionMap[v.path];
+                                    
                                     return (
-                                      <div className={`video-item ${isActive ? 'active' : ''}`} key={v.path} onClick={() => selectVideo(v)}>
-                                        <PlayCircle size={13} />
+                                      <div 
+                                        className={`video-item ${isActive ? 'active' : ''} ${isCompleted ? 'completed' : ''} ${!isUnlocked ? 'locked' : ''}`} 
+                                        key={v.path} 
+                                        onClick={() => isUnlocked && selectVideo(v)}
+                                        title={!isUnlocked ? "Finish previous lessons to unlock" : ""}
+                                      >
+                                        {!isUnlocked ? <Lock size={13} style={{ opacity: 0.7 }} /> : isCompleted ? <CheckCircle2 size={13} style={{ color: '#2ecc71' }} /> : <PlayCircle size={13} />}
                                         <span className="truncate flex-1">{v.name}</span>
-                                        <span className="vid-time-badge">Duration</span>
+                                        <span className="vid-time-badge">
+                                          {isCompleted ? 'Finished' : !isUnlocked ? 'Locked' : 'Ready'}
+                                        </span>
                                       </div>
                                     );
                                   })}
                                 </div>
                               )}
                             </div>
-                          ))
-                        )
+                          ));
+                        })()
                       )}
 
                       {sidebarTab === 'bookmarks' && (
@@ -944,7 +990,17 @@ function App() {
                     ref={videoRef} 
                     onTimeUpdate={onTimeUpdate} 
                     onPlay={() => setIsPlaying(true)} 
-                    onPause={() => setIsPlaying(false)} 
+                    onPause={() => { 
+                      setIsPlaying(false); 
+                      saveCurrentProgressInstantly(); 
+                    }}
+                    onEnded={() => {
+                      saveCurrentProgressInstantly(true); // Force completed immediately
+                      setTimeout(() => {
+                        handleSkipNextVideo(); // Load next track instantly after 500ms grace period
+                      }, 500);
+                    }}
+                    disableRemotePlayback
                     onClick={() => videoRef.current?.paused ? videoRef.current.play() : videoRef.current?.pause()} 
                     onDoubleClick={() => {
                       if (videoRef.current) {

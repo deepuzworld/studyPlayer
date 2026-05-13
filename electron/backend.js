@@ -173,6 +173,16 @@ class BackendService {
     return stats || { total_videos: 0, completed_videos: 0 };
   }
 
+  getCourseVideosProgress(courseId) {
+    const rows = this.db.prepare('SELECT path, is_completed FROM videos WHERE course_id = ?').all(courseId);
+    // Map into simple lookup key-value object
+    const map = {};
+    for (const row of rows) {
+      map[row.path] = row.is_completed;
+    }
+    return map;
+  }
+
   getLastCoursePath() {
     const row = this.db.prepare('SELECT root_path FROM courses ORDER BY id DESC LIMIT 1').get();
     return row ? row.root_path : null;

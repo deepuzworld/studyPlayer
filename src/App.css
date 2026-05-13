@@ -238,6 +238,29 @@
   color: var(--accent-hover);
 }
 
+.video-item.locked {
+  opacity: 0.45;
+  cursor: not-allowed;
+  pointer-events: none;
+  color: var(--text-dim);
+}
+
+.video-item.completed {
+  color: var(--accent-hover);
+}
+
+.video-item.completed .vid-time-badge {
+  color: #2ecc71;
+}
+
+/* Remove Native Cast overlays injected by browsers */
+video::-webkit-media-controls-cast-button,
+video::-internal-media-controls-cast-button {
+  display: none !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
+}
+
 .empty-state {
   padding: 40px 20px;
   text-align: center;
