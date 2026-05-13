@@ -95,11 +95,14 @@ const simulationApi = {
     courseId: Date.now(),
     path: p,
     structure: {
-      "01. Welcome Back": [
-        { name: "Resume Course Introduction.mp4", path: `${p}/resume.mp4` }
+      "Restored Course Module": [
+        { name: "Lesson 01.mp4", path: p + "/1.mp4" }
       ]
     }
-  })
+  }),
+  minimizeWindow: () => console.log("Sim minimize triggered"),
+  maximizeWindow: () => console.log("Sim maximize triggered"),
+  closeWindow: () => console.log("Sim close triggered")
 };
 
 const isNativeApp = !!window.electronAPI;
@@ -110,6 +113,7 @@ function App() {
   const [viewMode, setViewMode] = useState('dashboard'); // 'dashboard', 'player', 'settings'
   const [theme, setTheme] = useState('dark');
   const [playbackRate, setPlaybackRate] = useState(1);
+  const [isPipActive, setIsPipActive] = useState(false);
   const [activeDbTab, setActiveDbTab] = useState('home'); // 'home', 'recent', 'courses', 'streams', 'notes'
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const api = appMode === 'Native' ? (window.electronAPI || simulationApi) : simulationApi;
@@ -235,6 +239,19 @@ function App() {
       } else {
         videoRef.current.onloadedmetadata = handleLoaded;
       }
+
+      // PiP state listeners to enable adaptive container layouts
+      const el = videoRef.current;
+      const onEnter = () => setIsPipActive(true);
+      const onLeave = () => setIsPipActive(false);
+
+      el.addEventListener('enterpictureinpicture', onEnter);
+      el.addEventListener('leavepictureinpicture', onLeave);
+
+      return () => {
+        el.removeEventListener('enterpictureinpicture', onEnter);
+        el.removeEventListener('leavepictureinpicture', onLeave);
+      };
     }
   }, [activeVideo, appMode]);
 
@@ -368,6 +385,43 @@ function App() {
     setShowWorkspace(false);
     setShowRefPane(false);
     setShowTerminal(false);
+  };
+
+  // Helper to flatten structural course tree to flat array of lessons
+  const getFlatVideos = () => {
+    if (!courseData?.structure) return [];
+    const flat = [];
+    for (const moduleName in courseData.structure) {
+      flat.push(...courseData.structure[moduleName]);
+    }
+    return flat;
+  };
+
+  const handleSkipNextVideo = () => {
+    if (!activeVideo) return;
+    const flat = getFlatVideos();
+    const idx = flat.findIndex(v => v.path === activeVideo.path);
+    if (idx !== -1 && idx < flat.length - 1) {
+      selectVideo(flat[idx + 1]);
+    }
+  };
+
+  const handleSkipPrevVideo = () => {
+    if (!activeVideo) return;
+    const flat = getFlatVideos();
+    const idx = flat.findIndex(v => v.path === activeVideo.path);
+    if (idx !== -1 && idx > 0) {
+      selectVideo(flat[idx - 1]);
+    }
+  };
+
+  const cyclePlaybackRate = () => {
+    const rates = [0.5, 1, 1.25, 1.5, 2];
+    const currentIdx = rates.indexOf(playbackRate);
+    const nextIdx = currentIdx === -1 ? 1 : (currentIdx + 1) % rates.length;
+    const nextRate = rates[nextIdx];
+    setPlaybackRate(nextRate);
+    if (videoRef.current) videoRef.current.playbackRate = nextRate;
   };
 
   // Video progress engine
@@ -633,7 +687,11 @@ function App() {
               <button className="header-icon-btn" onClick={() => setViewMode('settings')} title="Open Settings Preferences" style={{ background: 'none', border: 'none', padding: 0, display: 'inline-flex' }}>
                 <Settings size={16} />
               </button>
-              <div className="window-controls"><Minus size={13} /><Square size={10} /><X size={13} /></div>
+              <div className="window-controls">
+                <Minus size={13} onClick={() => api.minimizeWindow?.()} />
+                <Square size={10} onClick={() => api.maximizeWindow?.()} />
+                <X size={13} onClick={() => api.closeWindow?.()} />
+              </div>
             </div>
           </div>
         </header>
@@ -882,7 +940,48 @@ function App() {
                   <span className="truncate text-dim flex-1 ml-2">{activeVideo ? activeVideo.name : 'Focused Stage Ready'}</span>
                 </div>
                 <div className="player-container">
-                  <video ref={videoRef} onTimeUpdate={onTimeUpdate} onPlay={() => setIsPlaying(true)} onPause={() => setIsPlaying(false)} onClick={() => videoRef.current?.paused ? videoRef.current.play() : videoRef.current?.pause()} />
+                  <video 
+                    ref={videoRef} 
+                    onTimeUpdate={onTimeUpdate} 
+                    onPlay={() => setIsPlaying(true)} 
+                    onPause={() => setIsPlaying(false)} 
+                    onClick={() => videoRef.current?.paused ? videoRef.current.play() : videoRef.current?.pause()} 
+                    onDoubleClick={() => {
+                      if (videoRef.current) {
+                        if (document.fullscreenElement) {
+                          document.exitFullscreen().catch(() => {});
+                        } else {
+                          videoRef.current.requestFullscreen().catch(() => {});
+                        }
+                      }
+                    }}
+                  />
+                  {isPipActive && activeVideo && (
+                    <div className="pip-active-overlay" style={{
+                      position: 'absolute', top: 0, left: 0, right: 0, bottom: 0,
+                      backgroundColor: 'var(--bg-main)', zIndex: 30, padding: '20px',
+                      display: 'flex', flexDirection: 'column', gap: '12px',
+                      backgroundImage: 'radial-gradient(circle at top right, rgba(108, 92, 231, 0.15), transparent)'
+                    }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--border-color)', paddingBottom: '10px' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--accent-hover)', fontWeight: 600, fontSize: '0.8rem' }}>
+                          <Tv size={15} /> <span>PiP Mode: Active Section Workspace</span>
+                        </div>
+                        <button className="action-btn run" style={{ padding: '2px 10px', fontSize: '0.7rem', borderRadius: '4px' }} onClick={() => document.exitPictureInPicture().catch(() => {})}>Return Video</button>
+                      </div>
+                      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                        <h3 style={{ color: 'var(--text-main)', fontSize: '0.9rem', fontWeight: 600, margin: 0 }}>{activeVideo.name}</h3>
+                        <p style={{ color: 'var(--text-dim)', fontSize: '0.72rem', margin: '0 0 4px 0' }}>Visual feed is floating. You can type comprehensive lesson memos in this container space:</p>
+                        <textarea 
+                          className="notes-textarea"
+                          placeholder="Write quick markdown insights or paste code outputs here..."
+                          style={{ flex: 1, fontSize: '0.78rem', background: 'var(--bg-dashboard-card)', border: '1px solid var(--border-color)' }}
+                          value={videoNote}
+                          onChange={(e) => handleNoteChange(e.target.value)}
+                        />
+                      </div>
+                    </div>
+                  )}
                   {!activeVideo && (
                     <div className="player-placeholder"><PlayCircle size={40} className="pulse-icon" /><span>Press Sidebar or Footer triggers to load content.</span></div>
                   )}
@@ -897,25 +996,28 @@ function App() {
                       <div className="control-row">
                         <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
                           <button onClick={() => videoRef.current?.paused ? videoRef.current.play() : videoRef.current?.pause()}>{isPlaying ? <Pause size={15} fill="currentColor"/> : <Play size={15} fill="currentColor"/>}</button>
-                          <button onClick={() => videoRef.current.currentTime -= 10}><SkipBack size={14} /></button>
-                          <button onClick={() => videoRef.current.currentTime += 10}><SkipForward size={14} /></button>
+                          <button title="Previous Track" onClick={handleSkipPrevVideo}><SkipBack size={14} /></button>
+                          <button title="Next Track" onClick={handleSkipNextVideo}><SkipForward size={14} /></button>
                           <span className="timestamp">{formatTime(currentTime)} / {formatTime(duration)}</span>
                           
-                          <select 
-                            value={playbackRate} 
-                            onChange={(e) => {
-                              const rate = parseFloat(e.target.value);
-                              setPlaybackRate(rate);
-                              if (videoRef.current) videoRef.current.playbackRate = rate;
+                          <button 
+                            onClick={cyclePlaybackRate}
+                            title="Cycle playback speed"
+                            style={{ 
+                              background: 'rgba(0,0,0,0.6)', 
+                              border: '1px solid rgba(255,255,255,0.2)', 
+                              color: 'white', 
+                              borderRadius: '4px', 
+                              fontSize: '0.7rem', 
+                              padding: '2px 8px', 
+                              cursor: 'pointer', 
+                              fontWeight: '600',
+                              display: 'inline-flex',
+                              alignItems: 'center'
                             }}
-                            style={{ background: 'rgba(0,0,0,0.6)', border: '1px solid rgba(255,255,255,0.2)', color: 'white', borderRadius: '4px', fontSize: '0.7rem', padding: '2px 4px', outline: 'none', cursor: 'pointer' }}
                           >
-                            <option value="0.5">0.5x</option>
-                            <option value="1">1.0x</option>
-                            <option value="1.25">1.25x</option>
-                            <option value="1.5">1.5x</option>
-                            <option value="2">2.0x</option>
-                          </select>
+                            {playbackRate}x
+                          </button>
                         </div>
                         <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
                           <button title="Floating Picture-in-Picture" onClick={() => videoRef.current?.requestPictureInPicture()} style={{ background: 'none', border: 'none', color: 'inherit', display: 'inline-flex' }}>

@@ -26,6 +26,16 @@
   flex-shrink: 0;
   background: var(--bg-panel);
   backdrop-filter: blur(10px);
+  -webkit-app-region: drag; /* Enable dragging of the frameless window */
+}
+
+.app-header button,
+.app-header a,
+.app-header input,
+.app-header div[role="button"],
+.app-header .window-controls,
+.app-header svg {
+  -webkit-app-region: no-drag; /* Ensure controls are interactive */
 }
 
 .app-body {
@@ -968,9 +978,24 @@
 
 .window-controls {
   display: flex;
-  gap: 12px;
+  gap: 14px;
   margin-left: 8px;
-  opacity: 0.3;
+  opacity: 0.6;
+  transition: opacity 0.2s ease;
+}
+
+.window-controls:hover {
+  opacity: 1;
+}
+
+.window-controls svg {
+  cursor: pointer;
+  transition: transform 0.1s ease, color 0.1s ease;
+}
+
+.window-controls svg:hover {
+  transform: scale(1.15);
+  color: var(--accent-hover);
 }
 
 /* --- Footer Components --- */

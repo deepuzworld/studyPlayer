@@ -29,18 +29,24 @@ process.on('unhandledRejection', (err) => {
 const BackendService = require('./backend');
 const isDev = process.env.NODE_ENV === 'development' || !app.isPackaged;
 
+let mainWindow; // Accessible outside createWindow for system-level window controllers
+
 function createWindow() {
-  const mainWindow = new BrowserWindow({
+  mainWindow = new BrowserWindow({
     width: 1280,
     height: 720,
     backgroundColor: '#0f111a',
-    frame: true, // You can set false for custom frame if needed
+    frame: false, // Fully frameless design to enable custom React headers
+    titleBarStyle: 'hidden', // Backup safety for macOS support
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       nodeIntegration: false,
       contextIsolation: true,
     },
   });
+
+  // Purge standard OS title menus (File, Edit, View...) to give modern appearance
+  mainWindow.removeMenu();
 
   // In production load index.html, in dev load from localhost
   if (isDev || process.argv.includes('--dev')) {
@@ -157,6 +163,25 @@ app.whenReady().then(() => {
 
   ipcMain.handle('set-setting', (event, key, val) => {
     return backend.setSetting(key, val);
+  });
+
+  // Native Frameless Window Interaction Handlers
+  ipcMain.on('window-minimize', () => {
+    if (mainWindow) mainWindow.minimize();
+  });
+
+  ipcMain.on('window-maximize', () => {
+    if (mainWindow) {
+      if (mainWindow.isMaximized()) {
+        mainWindow.unmaximize();
+      } else {
+        mainWindow.maximize();
+      }
+    }
+  });
+
+  ipcMain.on('window-close', () => {
+    if (mainWindow) mainWindow.close();
   });
 
   createWindow();

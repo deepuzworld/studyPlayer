@@ -21,5 +21,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   setSetting: (key, val) => ipcRenderer.invoke('set-setting', key, val),
   
   // Helper for loading local video files via custom streaming protocol that supports buffering & seeking!
-  getVideoSrc: (filePath) => `stream://local-file/${encodeURIComponent(filePath)}`
+  getVideoSrc: (filePath) => `stream://local-file/${encodeURIComponent(filePath)}`,
+
+  // Native Window Control Handlers for custom frameless React titlebars
+  minimizeWindow: () => ipcRenderer.send('window-minimize'),
+  maximizeWindow: () => ipcRenderer.send('window-maximize'),
+  closeWindow: () => ipcRenderer.send('window-close')
 });
