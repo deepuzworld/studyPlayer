@@ -238,6 +238,12 @@ function App() {
         if (el.currentTime < startPos) {
           el.currentTime = startPos;
         }
+        
+        // Cache exact video duration to the database immediately upon load
+        setTimeout(() => {
+          saveCurrentProgressInstantly();
+        }, 100);
+        
         el.play().catch(() => {});
       };
 
@@ -388,11 +394,29 @@ function App() {
       const isComp = forceCompleted || (cur / dur > 0.9);
       api.updateProgress(activeVideo.path, Math.floor(cur * 1000), Math.floor(dur * 1000), isComp);
       
-      // Ensure local map state tracks it seamlessly to update sidebar visuals instantly
-      if (isComp) {
-        setVideoCompletionMap(prev => ({ ...prev, [activeVideo.path]: 1 }));
+      // Ensure local map state tracks compound progress seamlessly
+      setVideoCompletionMap(prev => ({
+        ...prev,
+        [activeVideo.path]: {
+          is_completed: isComp ? 1 : (prev[activeVideo.path]?.is_completed || 0),
+          duration_ms: Math.floor(dur * 1000)
+        }
+      }));
+    }
+  };
+
+  // Absolute persistence guarantee triggered when clicking custom X close control
+  const handleAppExit = async () => {
+    if (activeVideo && videoRef.current) {
+      const cur = videoRef.current.currentTime;
+      const dur = videoRef.current.duration || 0;
+      if (dur > 0) {
+        const isComp = (cur / dur > 0.9);
+        // Explicitly await the promise so database completes commit before Electron exits
+        await api.updateProgress(activeVideo.path, Math.floor(cur * 1000), Math.floor(dur * 1000), isComp);
       }
     }
+    api.closeWindow?.();
   };
 
   // Auto-persists current playback frame when component is destroyed or switches tracks
@@ -429,7 +453,7 @@ function App() {
     return flat;
   };
 
-  const handleSkipNextVideo = () => {
+  const advanceToNextVideoTrack = () => {
     if (!activeVideo) return;
     const flat = getFlatVideos();
     const idx = flat.findIndex(v => v.path === activeVideo.path);
@@ -438,12 +462,15 @@ function App() {
     }
   };
 
-  const handleSkipPrevVideo = () => {
-    if (!activeVideo) return;
-    const flat = getFlatVideos();
-    const idx = flat.findIndex(v => v.path === activeVideo.path);
-    if (idx !== -1 && idx > 0) {
-      selectVideo(flat[idx - 1]);
+  const handleSeekForward10 = () => {
+    if (videoRef.current) {
+      videoRef.current.currentTime = Math.min(videoRef.current.duration || 0, videoRef.current.currentTime + 10);
+    }
+  };
+
+  const handleSeekBackward10 = () => {
+    if (videoRef.current) {
+      videoRef.current.currentTime = Math.max(0, videoRef.current.currentTime - 10);
     }
   };
 
@@ -704,7 +731,7 @@ function App() {
               <div className="window-controls">
                 <Minus size={13} onClick={() => api.minimizeWindow?.()} />
                 <Square size={10} onClick={() => api.maximizeWindow?.()} />
-                <X size={13} onClick={() => api.closeWindow?.()} />
+                <X size={13} onClick={handleAppExit} />
               </div>
             </div>
           </div>
@@ -881,21 +908,39 @@ function App() {
                                   {videos.map((v) => {
                                     const isActive = activeVideo?.path === v.path;
                                     const flatIdx = flatList.findIndex(x => x.path === v.path);
-                                    // A video is unlocked if it's the very first or the previous video is marked complete
-                                    const isUnlocked = flatIdx === 0 || !!videoCompletionMap[flatList[flatIdx - 1].path];
-                                    const isCompleted = !!videoCompletionMap[v.path];
+                                    
+                                    // State from structured mapping
+                                    const progressObj = videoCompletionMap[v.path];
+                                    const prevProgressObj = flatIdx > 0 ? videoCompletionMap[flatList[flatIdx - 1].path] : null;
+                                    
+                                    const isUnlocked = flatIdx === 0 || !!prevProgressObj?.is_completed;
+                                    const isCompleted = !!progressObj?.is_completed;
+                                    
+                                    // Extract duration from cache if available
+                                    const durationMs = progressObj?.duration_ms || 0;
+                                    const formattedDuration = durationMs > 0 ? formatTime(durationMs / 1000) : "00:00";
+                                    
+                                    // Block media streaming completely if simulation selected
+                                    const isSimModeBlocked = appMode === 'Simulation';
+                                    const itemClickable = isUnlocked && !isSimModeBlocked;
                                     
                                     return (
                                       <div 
-                                        className={`video-item ${isActive ? 'active' : ''} ${isCompleted ? 'completed' : ''} ${!isUnlocked ? 'locked' : ''}`} 
+                                        className={`video-item ${isActive ? 'active' : ''} ${isCompleted ? 'completed' : ''} ${(!itemClickable) ? 'locked' : ''}`} 
                                         key={v.path} 
-                                        onClick={() => isUnlocked && selectVideo(v)}
-                                        title={!isUnlocked ? "Finish previous lessons to unlock" : ""}
+                                        onClick={() => itemClickable && selectVideo(v)}
+                                        title={isSimModeBlocked ? "Videos unavailable in Simulation mode" : !isUnlocked ? "Finish previous lessons to unlock" : ""}
                                       >
-                                        {!isUnlocked ? <Lock size={13} style={{ opacity: 0.7 }} /> : isCompleted ? <CheckCircle2 size={13} style={{ color: '#2ecc71' }} /> : <PlayCircle size={13} />}
+                                        {isSimModeBlocked || !isUnlocked ? (
+                                          <Lock size={13} style={{ opacity: 0.7 }} />
+                                        ) : isCompleted ? (
+                                          <CheckCircle2 size={13} style={{ color: '#2ecc71' }} />
+                                        ) : (
+                                          <PlayCircle size={13} />
+                                        )}
                                         <span className="truncate flex-1">{v.name}</span>
-                                        <span className="vid-time-badge">
-                                          {isCompleted ? 'Finished' : !isUnlocked ? 'Locked' : 'Ready'}
+                                        <span className="vid-time-badge" style={{ marginLeft: 'auto', opacity: 0.8, paddingLeft: '10px' }}>
+                                          {formattedDuration}
                                         </span>
                                       </div>
                                     );
@@ -978,7 +1023,7 @@ function App() {
                     onEnded={() => {
                       saveCurrentProgressInstantly(true); // Force completed immediately
                       setTimeout(() => {
-                        handleSkipNextVideo(); // Load next track instantly after 500ms grace period
+                        advanceToNextVideoTrack(); // Load next track instantly after 500ms grace period
                       }, 500);
                     }}
                     disableRemotePlayback
@@ -1033,8 +1078,8 @@ function App() {
                       <div className="control-row">
                         <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
                           <button onClick={() => videoRef.current?.paused ? videoRef.current.play() : videoRef.current?.pause()}>{isPlaying ? <Pause size={15} fill="currentColor"/> : <Play size={15} fill="currentColor"/>}</button>
-                          <button title="Previous Track" onClick={handleSkipPrevVideo}><SkipBack size={14} /></button>
-                          <button title="Next Track" onClick={handleSkipNextVideo}><SkipForward size={14} /></button>
+                          <button title="Rewind 10s" onClick={handleSeekBackward10}><SkipBack size={14} /></button>
+                          <button title="Fast-Forward 10s" onClick={handleSeekForward10}><SkipForward size={14} /></button>
                           <span className="timestamp">{formatTime(currentTime)} / {formatTime(duration)}</span>
                           
                           <button 

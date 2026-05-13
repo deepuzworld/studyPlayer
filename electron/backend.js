@@ -174,11 +174,14 @@ class BackendService {
   }
 
   getCourseVideosProgress(courseId) {
-    const rows = this.db.prepare('SELECT path, is_completed FROM videos WHERE course_id = ?').all(courseId);
-    // Map into simple lookup key-value object
+    const rows = this.db.prepare('SELECT path, is_completed, duration_ms FROM videos WHERE course_id = ?').all(courseId);
+    // Map into simple lookup object holding both completion status and duration
     const map = {};
     for (const row of rows) {
-      map[row.path] = row.is_completed;
+      map[row.path] = {
+        is_completed: row.is_completed,
+        duration_ms: row.duration_ms || 0
+      };
     }
     return map;
   }
