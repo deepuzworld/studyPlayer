@@ -654,31 +654,7 @@ function App() {
 
   return (
     <div className="app-container">
-      {/* LEFT SIDEBAR (DASHBOARD) - ROOT LEVEL FULL HEIGHT */}
-      {viewMode === 'dashboard' && (
-        <aside className={`dashboard-sidebar ${mobileMenuOpen ? 'mobile-open' : ''}`}>
-          <div className="db-sidebar-brand" style={{ padding: '16px 18px 24px', borderBottom: '1px solid rgba(255,255,255,0.05)', marginBottom: '16px', display: 'flex', alignItems: 'center', gap: '12px' }}>
-            <div className="app-logo" style={{ backgroundColor: 'var(--accent-color)', borderRadius: '6px', width: '32px', height: '32px', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white' }}>
-              <Book size={18} fill="currentColor"/>
-            </div>
-            <h1 style={{ fontSize: '1.1rem', fontWeight: '700', color: 'var(--text-main)', margin: 0, letterSpacing: '0.5px' }}>Study Player</h1>
-          </div>
-          
-          <div className="db-sidebar-top">
-            <button className={`db-side-btn ${activeDbTab === 'home' ? 'active' : ''}`} onClick={() => { setActiveDbTab('home'); setMobileMenuOpen(false); }}><span className="db-side-btn-icon"><Home size={18} /></span> <span className="db-side-btn-label">Home</span></button>
-            <button className={`db-side-btn ${activeDbTab === 'recent' ? 'active' : ''}`} onClick={() => { setActiveDbTab('recent'); setMobileMenuOpen(false); }}><span className="db-side-btn-icon"><Clock size={18} /></span> <span className="db-side-btn-label">Recent</span></button>
-            <button className={`db-side-btn ${activeDbTab === 'courses' ? 'active' : ''}`} onClick={() => { setActiveDbTab('courses'); setMobileMenuOpen(false); }}><span className="db-side-btn-icon"><Book size={18} /></span> <span className="db-side-btn-label">Courses</span></button>
-            <button className={`db-side-btn ${activeDbTab === 'streams' ? 'active' : ''}`} onClick={() => { setActiveDbTab('streams'); setMobileMenuOpen(false); }}><span className="db-side-btn-icon"><Wifi size={18} /></span> <span className="db-side-btn-label">Streams</span></button>
-            <button className={`db-side-btn ${activeDbTab === 'notes' ? 'active' : ''}`} onClick={() => { setActiveDbTab('notes'); setMobileMenuOpen(false); }}><span className="db-side-btn-icon"><FileText size={18} /></span> <span className="db-side-btn-label">Notes</span></button>
-          </div>
-          
-          <div className="db-sidebar-bottom">
-            <button className="db-side-btn" onClick={() => { setViewMode('settings'); setMobileMenuOpen(false); }}><span className="db-side-btn-icon"><Settings size={18} /></span> <span className="db-side-btn-label">Settings</span></button>
-          </div>
-        </aside>
-      )}
-      
-      {mobileMenuOpen && <div className="sidebar-overlay" onClick={() => setMobileMenuOpen(false)}></div>}
+      {/* Container for Main App Workspace */}
 
       <div className="app-main-wrapper">
         {/* HEADER */}
@@ -694,10 +670,15 @@ function App() {
               </>
             ) : (
               <>
-                <button className="header-icon-btn dashboard-hamburger" onClick={() => setMobileMenuOpen(!mobileMenuOpen)} title="Toggle Navigation Menu" style={{ background: 'none', border: 'none', padding: 0, display: 'inline-flex', marginRight: '4px' }}>
-                  <Menu size={18} />
-                </button>
-                {/* Logo relocated to left sidebar */}
+                {activeDbTab !== 'home' && (
+                  <button className="header-icon-btn" onClick={() => setActiveDbTab('home')} title="Back to Home" style={{ background: 'none', border: 'none', padding: 0, display: 'inline-flex', marginRight: '8px' }}>
+                    <ChevronLeft size={18} />
+                  </button>
+                )}
+                <div className="app-logo" style={{ backgroundColor: 'var(--accent-color)', borderRadius: '6px', width: '26px', height: '26px', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white', flexShrink: 0 }}>
+                  <Book size={14} fill="currentColor"/>
+                </div>
+                <h1 style={{ fontSize: '0.95rem', fontWeight: '700', letterSpacing: '0.5px', margin: 0, cursor: 'pointer', color: 'var(--text-main)' }} onClick={() => setActiveDbTab('home')}>Study Player</h1>
               </>
             )}
           </div>
