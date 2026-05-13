@@ -1,0 +1,164 @@
+:root {
+  --bg-main: #090b11;
+  --bg-panel: #11141d;
+  --bg-panel-header: #171b27;
+  --bg-hover: #1e2333;
+  
+  /* Semantic Surface Enclosures */
+  --bg-sidebar: #0b0c12;
+  --bg-sidebar-header: #0f1018;
+  --bg-sidebar-content: #08090d;
+  --bg-textarea: #0d0e14;
+  --bg-card: #0e0f16;
+  --bg-card-hover: #13141e;
+  --bg-terminal: #0a0b10;
+  --bg-terminal-header: #0f111a;
+  --bg-terminal-body: #07080c;
+  --bg-player-compact: #09090c;
+  --bg-player-bg: #030303;
+  --bg-dashboard-viewport: #0f111a;
+  --bg-dashboard-sidebar: #090a10;
+  --bg-dashboard-content: #0c0e15;
+  --bg-dashboard-card: #131622;
+  --bg-dashboard-card-hover: #181b2a;
+  --bg-recent-card: #11141f;
+  --bg-recent-card-hover: #161926;
+  
+  /* Interactive Visual Gradients */
+  --grad-bottom-card: linear-gradient(180deg, #0f1017 0%, #07080c 100%);
+  --grad-trophy: linear-gradient(135deg, #301a5e, #1e1536);
+  --grad-trophy-active: linear-gradient(135deg, #5f4b18, #2c2207);
+  --border-trophy: #4a2c8f;
+  
+  --accent-color: #6c5ce7;
+  --accent-dim: rgba(108, 92, 231, 0.15);
+  --accent-hover: #8272ff;
+  
+  --text-main: #e2e8f0;
+  --text-secondary: #94a3b8;
+  --text-dim: #64748b;
+  
+  --border-color: #1f2535;
+  --scrollbar-color: #2d3548;
+  
+  --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --font-mono: 'Fira Code', monospace;
+}
+
+body.light-theme {
+  --bg-main: #f3f4f6;
+  --bg-panel: #ffffff;
+  --bg-panel-header: #f9fafb;
+  --bg-hover: #f3f4f6;
+  
+  --bg-sidebar: #ffffff;
+  --bg-sidebar-header: #f3f4f6;
+  --bg-sidebar-content: #ffffff;
+  --bg-textarea: #f9fafb;
+  --bg-card: #f9fafb;
+  --bg-card-hover: #f3f4f6;
+  --bg-terminal: #f9fafb;
+  --bg-terminal-header: #e5e7eb;
+  --bg-terminal-body: #ffffff;
+  --bg-player-compact: #f3f4f6;
+  --bg-player-bg: #e5e7eb;
+  --bg-dashboard-viewport: #ffffff;
+  --bg-dashboard-sidebar: #f9fafb;
+  --bg-dashboard-content: #f3f4f6;
+  --bg-dashboard-card: #ffffff;
+  --bg-dashboard-card-hover: #f9fafb;
+  --bg-recent-card: #ffffff;
+  --bg-recent-card-hover: #f9fafb;
+  
+  --grad-bottom-card: linear-gradient(180deg, #ffffff 0%, #f9fafb 100%);
+  --grad-trophy: linear-gradient(135deg, #ddd6fe, #c4b5fd);
+  --grad-trophy-active: linear-gradient(135deg, #fef3c7, #fde68a);
+  --border-trophy: #a78bfa;
+  
+  --text-main: #111827;
+  --text-secondary: #4b5563;
+  --text-dim: #6b7280;
+  
+  --border-color: #e5e7eb;
+  --scrollbar-color: #d1d5db;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: var(--font-sans);
+  background-color: var(--bg-main);
+  color: var(--text-main);
+  height: 100vh;
+  overflow: hidden;
+  user-select: none;
+  -webkit-font-smoothing: antialiased;
+}
+
+#root {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+button {
+  background: none;
+  border: none;
+  color: inherit;
+  cursor: pointer;
+  font-family: inherit;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s ease;
+}
+
+input {
+  background: none;
+  border: none;
+  color: inherit;
+  outline: none;
+  font-family: inherit;
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-color);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-dim);
+}
+
+.glass-panel {
+  background: var(--bg-panel);
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.truncate {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Utility Animations */
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+.animate-spin {
+  animation: spin 1s linear infinite;
+}
