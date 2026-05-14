@@ -143,8 +143,7 @@ input {
 
 .glass-panel {
   background: var(--bg-panel);
-  border: 1px solid var(--border-color);
-  border-radius: 12px;
+  border: none;
   overflow: hidden;
 }
 

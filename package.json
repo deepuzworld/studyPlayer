@@ -1,13 +1,13 @@
 {
-  "name": "study-player",
+  "name": "study-flux",
   "version": "1.0.0",
   "main": "electron/main.js",
   "description": "Elegant study media player with built-in code sandbox.",
   "author": {
-    "name": "Study Player",
-    "email": "support@studyplayer.app"
+    "name": "StudyFlux",
+    "email": "support@studyflux.app"
   },
-  "homepage": "https://studyplayer.app",
+  "homepage": "https://studyflux.app",
   "scripts": {
     "dev": "vite",
     "electron:dev": "concurrently \"npm run dev\" \"wait-on http://localhost:5173 && electron . --no-sandbox\"",
@@ -34,8 +34,8 @@
     "wait-on": "^7.2.0"
   },
   "build": {
-    "appId": "com.studyplayer.app",
-    "productName": "Study Player",
+    "appId": "com.studyflux.app",
+    "productName": "StudyFlux",
     "compression": "store",
     "directories": {
       "output": "release"

@@ -48,6 +48,19 @@ function createWindow() {
   // Purge standard OS title menus (File, Edit, View...) to give modern appearance
   mainWindow.removeMenu();
 
+  // Graceful shutdown delay to ensure persistent playback checkpoint flushes complete
+  let isQuitting = false;
+  mainWindow.on('close', (e) => {
+    if (!isQuitting) {
+      e.preventDefault();
+      mainWindow.webContents.send('force-save-playback');
+      setTimeout(() => {
+        isQuitting = true;
+        mainWindow.close();
+      }, 400); // Take a small lag to securely store current video content time
+    }
+  });
+
   // In production load index.html, in dev load from localhost
   if (isDev || process.argv.includes('--dev')) {
     mainWindow.loadURL('http://localhost:5173');
@@ -90,9 +103,8 @@ app.whenReady().then(() => {
     });
     if (!result.canceled) {
       const dirPath = result.filePaths[0];
-      const structure = await backend.scanDirectory(dirPath);
-      const courseId = backend.registerCourse(dirPath, structure);
-      return { path: dirPath, structure, courseId };
+      // Uniformly load through backend to preserve 'lastWatchedVideoPath' context!
+      return await backend.loadCourseByPath(dirPath);
     }
     return null;
   });
@@ -100,9 +112,8 @@ app.whenReady().then(() => {
   ipcMain.handle('scan-last-course', async () => {
     const lastPath = backend.getLastCoursePath();
     if (lastPath && fs.existsSync(lastPath)) {
-      const structure = await backend.scanDirectory(lastPath);
-      const courseId = backend.registerCourse(lastPath, structure);
-      return { path: lastPath, structure, courseId };
+      // Uniformly load through backend to preserve 'lastWatchedVideoPath' context!
+      return await backend.loadCourseByPath(lastPath);
     }
     return null;
   });
@@ -122,6 +133,24 @@ app.whenReady().then(() => {
 
   ipcMain.handle('get-course-progress', (event, courseId) => {
     return backend.getCourseVideosProgress(courseId);
+  });
+
+  ipcMain.handle('show-save-dialog', async (event, defaultName) => {
+    const { canceled, filePath } = await dialog.showSaveDialog(mainWindow, {
+      defaultPath: defaultName,
+      title: 'Save Script As',
+      filters: [
+        { name: 'JavaScript', extensions: ['js'] },
+        { name: 'Python', extensions: ['py'] },
+        { name: 'HTML File', extensions: ['html'] },
+        { name: 'All Files', extensions: ['*'] }
+      ]
+    });
+    return { canceled, filePath };
+  });
+
+  ipcMain.handle('get-all-notes-tree', async () => {
+    return backend.getAllNotesTree();
   });
 
   ipcMain.handle('run-code', async (event, code, filename, dirPath) => {
@@ -169,6 +198,19 @@ app.whenReady().then(() => {
     return backend.setSetting(key, val);
   });
 
+  // Persistent Playback Session Handlers
+  ipcMain.handle('save-playback', (event, data) => {
+    return backend.savePlayback(data);
+  });
+
+  ipcMain.on('save-playback', (event, data) => {
+    backend.savePlayback(data);
+  });
+
+  ipcMain.handle('get-playback', (event, videoPath) => {
+    return backend.getPlayback(videoPath);
+  });
+
   // Native Frameless Window Interaction Handlers
   ipcMain.on('window-minimize', () => {
     if (mainWindow) mainWindow.minimize();
@@ -186,6 +228,12 @@ app.whenReady().then(() => {
 
   ipcMain.on('window-close', () => {
     if (mainWindow) mainWindow.close();
+  });
+
+  app.on('before-quit', () => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('force-save-playback');
+    }
   });
 
   createWindow();

@@ -43,27 +43,40 @@ class BackendService {
           key TEXT PRIMARY KEY,
           val TEXT
       );
+      CREATE TABLE IF NOT EXISTS playback_history (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          video_path TEXT UNIQUE NOT NULL,
+          current_time REAL DEFAULT 0,
+          duration REAL DEFAULT 0,
+          last_watched INTEGER,
+          completed INTEGER DEFAULT 0
+      );
     `);
   }
 
+
   // --- Notes Operations ---
   getNote(videoPath) {
-    const row = this.db.prepare('SELECT content FROM notes WHERE video_path = ?').get(videoPath);
+    const normPath = videoPath.normalize('NFC');
+    const row = this.db.prepare('SELECT content FROM notes WHERE video_path = ?').get(normPath);
     return row ? row.content : '';
   }
 
   saveNote(videoPath, content) {
-    this.db.prepare('INSERT OR REPLACE INTO notes (video_path, content) VALUES (?, ?)').run(videoPath, content);
+    const normPath = videoPath.normalize('NFC');
+    this.db.prepare('INSERT OR REPLACE INTO notes (video_path, content) VALUES (?, ?)').run(normPath, content);
     return true;
   }
 
   // --- Bookmark Operations ---
   getBookmarks(videoPath) {
-    return this.db.prepare('SELECT id, timestamp_ms, note FROM bookmarks WHERE video_path = ? ORDER BY timestamp_ms ASC').all(videoPath);
+    const normPath = videoPath.normalize('NFC');
+    return this.db.prepare('SELECT id, timestamp_ms, note FROM bookmarks WHERE video_path = ? ORDER BY timestamp_ms ASC').all(normPath);
   }
 
   addBookmark(videoPath, timestampMs, note) {
-    const result = this.db.prepare('INSERT INTO bookmarks (video_path, timestamp_ms, note) VALUES (?, ?, ?)').run(videoPath, timestampMs, note);
+    const normPath = videoPath.normalize('NFC');
+    const result = this.db.prepare('INSERT INTO bookmarks (video_path, timestamp_ms, note) VALUES (?, ?, ?)').run(normPath, timestampMs, note);
     return { id: result.lastInsertRowid };
   }
 
@@ -102,7 +115,8 @@ class BackendService {
             for (const subEntry of sortedSub) {
               if (subEntry.name.startsWith('.')) continue;
               if (subEntry.isFile() && validExts.includes(path.extname(subEntry.name).toLowerCase())) {
-                videos.push({ name: subEntry.name, path: path.join(fullPath, subEntry.name) });
+                const finalPath = path.join(fullPath, subEntry.name).normalize('NFC');
+                videos.push({ name: subEntry.name, path: finalPath });
               }
             }
             
@@ -113,7 +127,7 @@ class BackendService {
             console.warn(`Skipping problematic directory ${fullPath}:`, subErr.message);
           }
         } else if (entry.isFile() && validExts.includes(path.extname(name).toLowerCase())) {
-          topLevelVideos.push({ name: name, path: fullPath });
+          topLevelVideos.push({ name: name, path: fullPath.normalize('NFC') });
         }
       }
 
@@ -130,18 +144,20 @@ class BackendService {
 
   // --- DB Operations ---
   registerCourse(rootPath, structure) {
+    const normRoot = rootPath.normalize('NFC');
     const insertCourse = this.db.prepare('INSERT OR IGNORE INTO courses (root_path) VALUES (?)');
     const getCourseId = this.db.prepare('SELECT id FROM courses WHERE root_path = ?');
     const insertVideo = this.db.prepare('INSERT OR IGNORE INTO videos (course_id, path) VALUES (?, ?)');
 
     const transaction = this.db.transaction(() => {
-      insertCourse.run(rootPath);
-      const row = getCourseId.get(rootPath);
+      insertCourse.run(normRoot);
+      const row = getCourseId.get(normRoot);
       const courseId = row.id;
 
       for (const moduleName in structure) {
         for (const video of structure[moduleName]) {
-          insertVideo.run(courseId, video.path);
+          const normVidPath = video.path.normalize('NFC');
+          insertVideo.run(courseId, normVidPath);
         }
       }
       return courseId;
@@ -151,16 +167,28 @@ class BackendService {
   }
 
   getVideoState(videoPath) {
-    const row = this.db.prepare('SELECT last_position_ms, duration_ms, is_completed FROM videos WHERE path = ?').get(videoPath);
+    const normPath = videoPath.normalize('NFC');
+    const row = this.db.prepare('SELECT last_position_ms, duration_ms, is_completed FROM videos WHERE path = ?').get(normPath);
     return row || { last_position_ms: 0, duration_ms: 0, is_completed: 0 };
   }
 
   updateProgress(videoPath, posMs, durMs, isCompleted) {
-    this.db.prepare(`
-      UPDATE videos 
-      SET last_position_ms = ?, duration_ms = ?, is_completed = MAX(is_completed, ?) 
-      WHERE path = ?
-    `).run(posMs, durMs, isCompleted ? 1 : 0, videoPath);
+    try {
+      const normPath = videoPath.normalize('NFC');
+      this.db.prepare(`
+        UPDATE videos 
+        SET last_position_ms = ?, duration_ms = ?, is_completed = MAX(is_completed, ?) 
+        WHERE path = ?
+      `).run(posMs, durMs, isCompleted ? 1 : 0, normPath);
+
+      // Track user's exact last-watched media context inside internal configuration tables
+      const row = this.db.prepare('SELECT course_id FROM videos WHERE path = ?').get(normPath);
+      if (row && row.course_id) {
+        this.setSetting(`last_watched_${row.course_id}`, normPath);
+      }
+    } catch(err) {
+      console.error("Database transaction failed in progress persistence:", err);
+    }
   }
 
   getCourseStats(courseId) {
@@ -212,10 +240,15 @@ class BackendService {
   async loadCourseByPath(dirPath) {
     const structure = await this.scanDirectory(dirPath);
     const courseId = this.registerCourse(dirPath, structure);
+    
+    // Query active persistence index for this specific course context
+    const lastWatched = this.getSetting(`last_watched_${courseId}`);
+    
     return {
       courseId,
       path: dirPath,
-      structure
+      structure,
+      lastWatchedVideoPath: lastWatched || null
     };
   }
 
@@ -253,6 +286,38 @@ class BackendService {
       return { success: false, error: e.message };
     }
   }
+
+  getAllNotesTree() {
+    try {
+      const rows = this.db.prepare(`
+        SELECT 
+            n.content,
+            v.path as video_path,
+            c.root_path as course_path
+        FROM notes n
+        JOIN videos v ON n.video_path = v.path
+        JOIN courses c ON v.course_id = c.id
+        WHERE n.content IS NOT NULL AND TRIM(n.content) != ''
+      `).all();
+      
+      const tree = {};
+      for (const row of rows) {
+        const courseName = path.basename(row.course_path);
+        if (!tree[courseName]) tree[courseName] = [];
+        tree[courseName].push({
+          videoName: path.basename(row.video_path),
+          videoPath: row.video_path,
+          coursePath: row.course_path,
+          snippet: row.content.substring(0, 80) + (row.content.length > 80 ? '...' : '')
+        });
+      }
+      return tree;
+    } catch (e) {
+      console.error("Failed fetching notes tree", e);
+      return {};
+    }
+  }
+
   // --- App Settings ---
   getSetting(key) {
     const row = this.db.prepare('SELECT val FROM app_settings WHERE key = ?').get(key);
@@ -263,6 +328,49 @@ class BackendService {
     this.db.prepare('INSERT OR REPLACE INTO app_settings (key, val) VALUES (?, ?)').run(key, val);
     return true;
   }
+
+  // --- Persistent Playback Sessions Checkpoint System ---
+  savePlayback(data) {
+    try {
+      const normPath = data.path.normalize('NFC');
+      const completed = data.completed ? 1 : (data.duration > 0 && (data.currentTime / data.duration > 0.95) ? 1 : 0);
+      this.db.prepare(`
+        INSERT INTO playback_history (
+           video_path,
+           current_time,
+           duration,
+           last_watched,
+           completed
+        )
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(video_path)
+        DO UPDATE SET
+           current_time = excluded.current_time,
+           duration = excluded.duration,
+           last_watched = excluded.last_watched,
+           completed = MAX(playback_history.completed, excluded.completed);
+      `).run(normPath, data.currentTime, data.duration, Date.now(), completed);
+
+      // Also keep internal videos schema in sync to prevent progress mismatch
+      this.updateProgress(normPath, Math.floor(data.currentTime * 1000), Math.floor(data.duration * 1000), completed === 1);
+      return true;
+    } catch (err) {
+      console.error("Failed saving playback checkpoint:", err);
+      return false;
+    }
+  }
+
+  getPlayback(videoPath) {
+    try {
+      const normPath = videoPath.normalize('NFC');
+      const row = this.db.prepare('SELECT current_time as currentTime, duration, last_watched as lastWatched, completed FROM playback_history WHERE video_path = ?').get(normPath);
+      return row || null;
+    } catch (err) {
+      console.error("Failed fetching playback checkpoint:", err);
+      return null;
+    }
+  }
 }
 
 module.exports = BackendService;
+

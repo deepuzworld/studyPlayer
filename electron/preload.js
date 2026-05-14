@@ -9,6 +9,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getCourseProgress: (id) => ipcRenderer.invoke('get-course-progress', id),
   runCode: (code, filename, dirPath) => ipcRenderer.invoke('run-code', code, filename, dirPath),
   saveCode: (code, filename, dirPath) => ipcRenderer.invoke('save-code', code, filename, dirPath),
+  showSaveDialog: (defaultName) => ipcRenderer.invoke('show-save-dialog', defaultName),
+  getAllNotesTree: () => ipcRenderer.invoke('get-all-notes-tree'),
   
   // Notes & Bookmarks functionality
   getNote: (videoPath) => ipcRenderer.invoke('get-note', videoPath),
@@ -20,6 +22,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
   loadCourseByPath: (dirPath) => ipcRenderer.invoke('load-course-by-path', dirPath),
   getSetting: (key) => ipcRenderer.invoke('get-setting', key),
   setSetting: (key, val) => ipcRenderer.invoke('set-setting', key, val),
+  
+  // Persistent Playback Checkpoint IPC API
+  savePlayback: (data) => ipcRenderer.send('save-playback', data),
+  getPlayback: (path) => ipcRenderer.invoke('get-playback', path),
+  onForceSavePlayback: (callback) => ipcRenderer.on('force-save-playback', callback),
   
   // Helper for loading local video files via custom streaming protocol that supports buffering & seeking!
   getVideoSrc: (filePath) => `stream://local-file/${encodeURIComponent(filePath)}`,

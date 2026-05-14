@@ -41,7 +41,7 @@
 .app-body {
   flex: 1;
   display: flex;
-  padding: 10px;
+  padding: 0;
   overflow: hidden;
   background: var(--bg-main);
 }
@@ -132,8 +132,7 @@
   flex-direction: column;
   overflow: hidden;
   background: var(--bg-sidebar); /* Deep cohesive dark bg */
-  border: 1px solid var(--border-color);
-  border-radius: 10px;
+  border-right: 1px solid var(--border-color);
 }
 
 /* 1. Top Navigation row */

@@ -10,6 +10,8 @@ import {
   Pause,
   SkipForward, 
   SkipBack, 
+  RotateCcw,
+  RotateCw,
   Volume2, 
   Maximize, 
   Maximize2,
@@ -104,7 +106,28 @@ const simulationApi = {
   minimizeWindow: () => console.log("Sim minimize triggered"),
   maximizeWindow: () => console.log("Sim maximize triggered"),
   closeWindow: () => console.log("Sim close triggered"),
-  getCourseProgress: async () => ({})
+  getCourseProgress: async () => ({}),
+  savePlayback: async (data) => {
+    localStorage.setItem(`playback_${data.path}`, JSON.stringify({
+      currentTime: data.currentTime,
+      duration: data.duration,
+      lastWatched: Date.now(),
+      completed: data.completed || (data.duration > 0 && (data.currentTime / data.duration > 0.95))
+    }));
+    return true;
+  },
+  getPlayback: async (path) => {
+    try {
+      const saved = localStorage.getItem(`playback_${path}`);
+      return saved ? JSON.parse(saved) : null;
+    } catch(e) {
+      return null;
+    }
+  },
+  onForceSavePlayback: (cb) => {
+    // Provide a mocked trigger if needed
+    window.forceSavePlaybackSim = cb;
+  }
 };
 
 const isNativeApp = !!window.electronAPI;
@@ -127,6 +150,8 @@ function App() {
   const [activeVideo, setActiveVideo] = useState(null);
   const [isCollapsed, setIsCollapsed] = useState({});
   const [recentWorkspaces, setRecentWorkspaces] = useState([]);
+  const [notesTree, setNotesTree] = useState({}); // Multi-course hierarchical tree mapping for Dashboard notebook view
+  const [expandedNotes, setExpandedNotes] = useState({}); // Toggle map for accordion UI expansions
 
   // Layout state
   const [showSidebar, setShowSidebar] = useState(true);
@@ -137,6 +162,9 @@ function App() {
 
   // Video state
   const [videoNote, setVideoNote] = useState('');
+  const [noteVideoPath, setNoteVideoPath] = useState(''); // Tracks active video context for CURRENT editor session
+  const [isNoteDirty, setIsNoteDirty] = useState(false); // Blocks auto-load until user manually saves notes
+  const [pendingNoteVideo, setPendingNoteVideo] = useState(null); // Stashes next video note target
   const [bookmarks, setBookmarks] = useState([]);
   const [newBmText, setNewBmText] = useState('');
   const noteSaveTimeout = useRef(null);
@@ -145,10 +173,11 @@ function App() {
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
+  const playbackSaveTimeout = useRef(null);
 
   // Multi-File Editor States
   const [openFiles, setOpenFiles] = useState([
-    { name: 'playground.js', content: '// Start your scripting here!\nconsole.log("Workspace initialized!");\n', isDirty: true }
+    { name: 'Untitled-1', content: '// Write code here\nconsole.log("Hello Workspace!");\n', isDirty: true, isUntitled: true }
   ]);
   const [activeFileIdx, setActiveFileIdx] = useState(0);
   const [isRunning, setIsRunning] = useState(false);
@@ -159,7 +188,7 @@ function App() {
   // Console logging states
   const [termTab, setTermTab] = useState('output');
   const [outputLogs, setOutputLogs] = useState([]);
-  const [terminalHistory, setTerminalHistory] = useState([{ type: 'sys', text: 'Study Player Terminal ready.' }]);
+  const [terminalHistory, setTerminalHistory] = useState([{ type: 'sys', text: 'StudyFlux Terminal ready.' }]);
   const [consoleLogs, setConsoleLogs] = useState([{ type: 'info', text: 'Ready.' }]);
   const [termInputVal, setTermInputVal] = useState('');
 
@@ -202,11 +231,36 @@ function App() {
     }
   };
 
-  // Video tracking states
+  const refreshNotesTree = async () => {
+    try {
+      const res = await api.getAllNotesTree();
+      if (res) setNotesTree(res);
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  // Load dynamic notes tree when navigating into Notes tab
+  useEffect(() => {
+    if (activeDbTab === 'notes' && viewMode === 'dashboard') {
+      refreshNotesTree();
+    }
+  }, [activeDbTab, viewMode, appMode]);
+
+  // Video tracking states (Optimized with Notes persistence lock)
   useEffect(() => {
     if (activeVideo) {
-      api.getNote(activeVideo.path).then(res => setVideoNote(res || ''));
+      // Bookmarks transition instantly
       api.getBookmarks(activeVideo.path).then(res => setBookmarks(res || []));
+      
+      // Enforce persistence guarantee: If current note is dirty, lock context and stash target!
+      if (isNoteDirty) {
+        setPendingNoteVideo(activeVideo);
+      } else {
+        setNoteVideoPath(activeVideo.path);
+        setPendingNoteVideo(null);
+        api.getNote(activeVideo.path).then(res => setVideoNote(res || ''));
+      }
     }
   }, [activeVideo, appMode]);
 
@@ -220,52 +274,49 @@ function App() {
 
   // Robust Video Track Loading & Auto-playback handling
   useEffect(() => {
-    if (activeVideo && videoRef.current) {
-      const isNetwork = activeVideo.path.startsWith('http://') || activeVideo.path.startsWith('https://');
-      const src = isNetwork ? activeVideo.path : api.getVideoSrc(activeVideo.path);
-      
-      // Avoid setting same src repeatedly to prevent resets
-      if (videoRef.current.src !== src) {
-        videoRef.current.src = src;
-        videoRef.current.load();
-      }
+    const video = videoRef.current;
+    if (!activeVideo || !video) return;
 
-      const startPos = (activeVideo.last_position_ms || 0) / 1000;
-      videoRef.current.playbackRate = playbackRate;
-
-      const el = videoRef.current;
-      const handleLoaded = () => {
-        if (el.currentTime < startPos) {
-          el.currentTime = startPos;
-        }
-        
-        // Cache exact video duration to the database immediately upon load
-        setTimeout(() => {
-          saveCurrentProgressInstantly();
-        }, 100);
-        
-        el.play().catch(() => {});
-      };
-
-      if (el.readyState >= 2) {
-        handleLoaded();
-      } else {
-        el.addEventListener('loadeddata', handleLoaded);
-      }
-
-      // PiP state listeners to enable adaptive container layouts
-      const onEnter = () => setIsPipActive(true);
-      const onLeave = () => setIsPipActive(false);
-
-      el.addEventListener('enterpictureinpicture', onEnter);
-      el.addEventListener('leavepictureinpicture', onLeave);
-
-      return () => {
-        el.removeEventListener('loadeddata', handleLoaded);
-        el.removeEventListener('enterpictureinpicture', onEnter);
-        el.removeEventListener('leavepictureinpicture', onLeave);
-      };
+    const isNetwork = activeVideo.path.startsWith('http://') || activeVideo.path.startsWith('https://');
+    const src = isNetwork ? activeVideo.path : api.getVideoSrc(activeVideo.path);
+    
+    // Avoid setting same src repeatedly to prevent resets
+    if (video.src !== src) {
+      video.src = src;
+      video.load();
     }
+
+    const savedTime = (activeVideo.last_position_ms || 0) / 1000;
+    video.playbackRate = playbackRate;
+
+    console.log("RESTORING:", savedTime);
+
+    const restorePlayback = () => {
+      console.log("VIDEO READY");
+      if (savedTime > 5 && savedTime < video.duration) {
+        video.currentTime = savedTime;
+      }
+      video.play().catch(() => {});
+    };
+
+    video.addEventListener("loadedmetadata", restorePlayback);
+
+    if (video.readyState >= 1) {
+      restorePlayback();
+    }
+
+    // PiP state listeners to enable adaptive container layouts
+    const onEnter = () => setIsPipActive(true);
+    const onLeave = () => setIsPipActive(false);
+
+    video.addEventListener('enterpictureinpicture', onEnter);
+    video.addEventListener('leavepictureinpicture', onLeave);
+
+    return () => {
+      video.removeEventListener("loadedmetadata", restorePlayback);
+      video.removeEventListener('enterpictureinpicture', onEnter);
+      video.removeEventListener('leavepictureinpicture', onLeave);
+    };
   }, [activeVideo, appMode]);
 
   // Dynamic Hotkeys
@@ -361,23 +412,51 @@ function App() {
     }
   };
 
-  const handleLoadCoursePath = async (dirPath) => {
+  const handleLoadCoursePath = async (dirPath, targetVideoPath = null) => {
     try {
       const res = await api.loadCourseByPath(dirPath);
-      if (res) loadCourseState(res);
+      if (res) loadCourseState(res, targetVideoPath);
     } catch(err) {
       console.error("Could not load recent course", err);
     }
   };
 
-  const loadCourseState = (data) => {
+  const loadCourseState = (data, targetVideoPath = null) => {
     setCourseData(data);
     setViewMode('player');
     setShowSidebar(true); // Open sidebar so modules are immediately accessible
+    if (targetVideoPath) {
+      setSidebarTab('notes'); // If jumping from notes dashboard, focus Notes tab
+    }
     
     if (data.structure) {
       const keys = Object.keys(data.structure);
       if (keys.length > 0) {
+        // Combine Deep-Linking AND Historical Auto-Resume queries to fix course resets
+        const activeSearchPath = targetVideoPath || data.lastWatchedVideoPath;
+        
+        if (activeSearchPath) {
+          let matchedVid = null;
+          let targetMod = keys[0];
+          
+          for (const modKey of keys) {
+            const match = data.structure[modKey].find(v => v.path.normalize() === activeSearchPath.normalize());
+            if (match) {
+              matchedVid = match;
+              targetMod = modKey;
+              break;
+            }
+          }
+          
+          if (matchedVid) {
+            // Auto-expand containing module folder and select video track
+            setIsCollapsed({ [targetMod]: true });
+            selectVideo(matchedVid);
+            return; 
+          }
+        }
+        
+        // Absolute Fallback: Autoplay absolute first lesson
         setIsCollapsed({ [keys[0]]: true });
         const firstV = data.structure[keys[0]][0];
         if (firstV) selectVideo(firstV);
@@ -390,9 +469,30 @@ function App() {
     if (!activeVideo || !videoRef.current) return;
     const cur = videoRef.current.currentTime;
     const dur = videoRef.current.duration || 0;
+    
+    // CRITICAL DESTRUCTIVE OVERWRITE PROTECTION:
+    // Prevent HTML5 dynamic loading race conditions from committing 0ms state over active DB benchmarks.
+    if (cur === 0 && activeVideo.last_position_ms > 0 && !forceCompleted) {
+      return;
+    }
+    
     if (dur > 0) {
-      const isComp = forceCompleted || (cur / dur > 0.9);
+      const isComp = forceCompleted || (cur / dur > 0.95);
       api.updateProgress(activeVideo.path, Math.floor(cur * 1000), Math.floor(dur * 1000), isComp);
+      
+      // Save checkpoint to persistent playback session table immediately
+      if (api.savePlayback) {
+        console.log("SAVING:", cur);
+        try {
+          const res = api.savePlayback({
+            path: activeVideo.path,
+            currentTime: cur,
+            duration: dur,
+            completed: isComp
+          });
+          if (res && res.catch) res.catch(() => {});
+        } catch (e) {}
+      }
       
       // Ensure local map state tracks compound progress seamlessly
       setVideoCompletionMap(prev => ({
@@ -411,13 +511,54 @@ function App() {
       const cur = videoRef.current.currentTime;
       const dur = videoRef.current.duration || 0;
       if (dur > 0) {
-        const isComp = (cur / dur > 0.9);
-        // Explicitly await the promise so database completes commit before Electron exits
+        const isComp = (cur / dur > 0.95);
         await api.updateProgress(activeVideo.path, Math.floor(cur * 1000), Math.floor(dur * 1000), isComp);
+        if (api.savePlayback) {
+          console.log("SAVING:", cur);
+          try {
+            const res = api.savePlayback({
+              path: activeVideo.path,
+              currentTime: cur,
+              duration: dur,
+              completed: isComp
+            });
+            if (res && res.catch) await res.catch(() => {});
+          } catch (e) {}
+        }
       }
     }
     api.closeWindow?.();
   };
+
+  // Listen for force-save-playback event from Electron Main Process on app close/quit
+  useEffect(() => {
+    if (api.onForceSavePlayback) {
+      api.onForceSavePlayback(() => {
+        saveCurrentProgressInstantly();
+      });
+    }
+  }, [activeVideo]);
+
+  // Combined robust saving strategy: persist every 5 seconds to guarantee persistence against crashes
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!activeVideo || !video || !api.savePlayback) return;
+
+    const interval = setInterval(() => {
+      console.log("SAVING:", video.currentTime);
+      try {
+        const res = api.savePlayback({
+          path: activeVideo.path,
+          currentTime: video.currentTime,
+          duration: video.duration || 0,
+          completed: video.duration > 0 && (video.currentTime / video.duration > 0.95)
+        });
+        if (res && res.catch) res.catch(() => {});
+      } catch (e) {}
+    }, 5000);
+
+    return () => clearInterval(interval);
+  }, [activeVideo]);
 
   // Auto-persists current playback frame when component is destroyed or switches tracks
   useEffect(() => {
@@ -433,7 +574,17 @@ function App() {
     const isNetwork = video.path.startsWith('http://') || video.path.startsWith('https://');
     const state = isNetwork ? { last_position_ms: 0, duration_ms: 0 } : await api.getVideoState(video.path);
     
-    setActiveVideo({ ...video, ...state });
+    // Check persistent playback history session table
+    const savedPlayback = isNetwork || !api.getPlayback ? null : await api.getPlayback(video.path).catch(() => null);
+    
+    let targetResumeTimeMs = state?.last_position_ms || 0;
+    if (savedPlayback && savedPlayback.currentTime > 5) {
+      targetResumeTimeMs = Math.floor(savedPlayback.currentTime * 1000);
+    } else if (targetResumeTimeMs < 5000) {
+      targetResumeTimeMs = 0;
+    }
+    
+    setActiveVideo({ ...video, ...state, last_position_ms: targetResumeTimeMs });
     setViewMode('player');
 
     // AUTO-COLLAPSE REQUIREMENT: maximizes video immediately
@@ -456,7 +607,7 @@ function App() {
   const advanceToNextVideoTrack = () => {
     if (!activeVideo) return;
     const flat = getFlatVideos();
-    const idx = flat.findIndex(v => v.path === activeVideo.path);
+    const idx = flat.findIndex(v => v.path.normalize() === activeVideo.path.normalize());
     if (idx !== -1 && idx < flat.length - 1) {
       selectVideo(flat[idx + 1]);
     }
@@ -483,6 +634,25 @@ function App() {
     if (videoRef.current) videoRef.current.playbackRate = nextRate;
   };
 
+  // Debounced Save System implementation
+  const scheduleSave = (time, dur) => {
+    if (playbackSaveTimeout.current) clearTimeout(playbackSaveTimeout.current);
+    playbackSaveTimeout.current = setTimeout(() => {
+      if (api.savePlayback && activeVideo) {
+        console.log("SAVING:", time);
+        try {
+          const res = api.savePlayback({
+            path: activeVideo.path,
+            currentTime: time,
+            duration: dur,
+            completed: time / dur > 0.95
+          });
+          if (res && res.catch) res.catch(() => {});
+        } catch (e) {}
+      }
+    }, 5000);
+  };
+
   // Video progress engine
   const onTimeUpdate = () => {
     if (!videoRef.current) return;
@@ -491,12 +661,17 @@ function App() {
     setCurrentTime(cur);
     setDuration(dur);
 
+    // Debounced tracking via scheduleSave to prevent excessive disk writes
+    if (dur > 0 && activeVideo) {
+      scheduleSave(cur, dur);
+    }
+
     const curSec = Math.floor(cur);
     if (curSec % 3 === 0 && curSec !== lastProgressUpdateRef.current && activeVideo && dur > 0) {
       lastProgressUpdateRef.current = curSec;
       saveCurrentProgressInstantly();
       
-      const comp = cur / dur > 0.9;
+      const comp = cur / dur > 0.95;
       if (comp && activeVideo.is_completed === 0) {
         setActiveVideo(prev => ({ ...prev, is_completed: 1 }));
       }
@@ -512,12 +687,18 @@ function App() {
   };
 
   const handleAddNewFile = () => {
-    const name = window.prompt("Enter filename (e.g., task.js, script.py):", `file_${openFiles.length + 1}.js`);
-    if (!name) return;
+    const nextNum = openFiles.length + 1;
+    const name = `Untitled-${nextNum}`;
     
-    const newF = { name, content: `// File: ${name}\nconsole.log("Executing ${name}!");\n`, isDirty: true };
+    const newF = { 
+      name, 
+      content: `// Workspace: ${name}\nconsole.log("Execution testing context ready...");\n`, 
+      isDirty: true,
+      isUntitled: true
+    };
+    
     setOpenFiles([...openFiles, newF]);
-    setActiveFileIdx(openFiles.length); // Switch immediately
+    setActiveFileIdx(openFiles.length); // Select new tab immediately
   };
 
   const handleCloseFile = (e, idx) => {
@@ -528,22 +709,47 @@ function App() {
     setActiveFileIdx(prev => Math.max(0, prev - 1));
   };
 
-  const handleSaveCode = async () => {
+  const handleSaveCode = async (forcePrompt = false) => {
     const activeF = openFiles[activeFileIdx];
-    const dirPath = courseData?.path || null;
-    const res = await api.saveCode(activeF.content, activeF.name, dirPath);
+    let currentName = activeF.name;
+    let currentDir = courseData?.path || null;
+    
+    // Pop OS save dialog if file is 'Untitled' or explicit 'Save As' requested
+    if (activeF.isUntitled || forcePrompt) {
+      const dialogRes = await api.showSaveDialog(currentName);
+      if (dialogRes.canceled || !dialogRes.filePath) return { success: false };
+      
+      const fullPath = dialogRes.filePath;
+      // Safe extract basename and directory
+      const parts = fullPath.split(/[/\\]/);
+      const fileName = parts[parts.length - 1];
+      const parentFolder = fullPath.substring(0, fullPath.lastIndexOf(fileName) - 1);
+      
+      const updated = [...openFiles];
+      updated[activeFileIdx].name = fileName;
+      updated[activeFileIdx].isUntitled = false;
+      updated[activeFileIdx].realPath = fullPath;
+      setOpenFiles(updated);
+      
+      currentName = fileName;
+      currentDir = parentFolder;
+    }
+    
+    const res = await api.saveCode(activeF.content, currentName, currentDir);
     if (res.success) {
       const updated = [...openFiles];
       updated[activeFileIdx].isDirty = false;
       setOpenFiles(updated);
       
       const logs = [...outputLogs];
-      logs.push({ type: 'sys', text: `✓ Saved file to: ${res.path || activeF.name}` });
+      logs.push({ type: 'sys', text: `✓ Saved file: ${currentName}` });
       setOutputLogs(logs.slice(-30));
+      return { success: true };
     } else {
       const logs = [...outputLogs];
       logs.push({ type: 'err', text: `✗ Save Failed: ${res.error || 'Unknown error'}` });
       setOutputLogs(logs.slice(-30));
+      return { success: false };
     }
   };
 
@@ -559,34 +765,68 @@ function App() {
   }
 
   const handleExecuteCode = async () => {
+    const activeF = openFiles[activeFileIdx];
+    
+    // Force save prompt for untitled files BEFORE running to ensure extensions exist!
+    if (activeF.isUntitled) {
+      const saveOk = await handleSaveCode();
+      if (!saveOk || !saveOk.success) return; // Cancelled by user
+    }
+    
     setIsRunning(true);
     setShowWorkspace(true);
     setShowTerminal(true);
     setTermTab('output');
 
-    const activeF = openFiles[activeFileIdx];
+    // Read re-rendered file properties (in case it was just named)
+    const reloadedF = openFiles[activeFileIdx];
     const dirPath = courseData?.path || null;
-    const res = await api.runCode(activeF.content, activeF.name, dirPath);
+    const res = await api.runCode(reloadedF.content, reloadedF.name, dirPath);
     
-    // Execution saves file implicitly, clear dirtiness
+    // Execution auto-saves, clear dirtiness
     const updated = [...openFiles];
     updated[activeFileIdx].isDirty = false;
     setOpenFiles(updated);
     
     const logs = [...outputLogs];
-    logs.push({ type: 'cmd', text: `Executing file [ ${activeF.name} ]...` });
+    logs.push({ type: 'cmd', text: `Executing [ ${reloadedF.name} ]...` });
     if (res.output) logs.push({ type: 'out', text: res.output });
     if (res.error) logs.push({ type: 'err', text: res.error });
     setOutputLogs(logs.slice(-30));
     setIsRunning(false);
   };
 
-  // Notes and Bookmarks
+  // Notes and Bookmarks (Optimized with Persistence state-machine locks)
   const handleNoteChange = (val) => {
     setVideoNote(val);
-    if (activeVideo) {
+    setIsNoteDirty(true); // Trigger dirty lock immediately on keystroke
+    
+    // Note target must fall back to currentNoteVideoPath to prevent overwrites during locks
+    const targetPath = noteVideoPath || activeVideo?.path;
+    if (targetPath) {
       if (noteSaveTimeout.current) clearTimeout(noteSaveTimeout.current);
-      noteSaveTimeout.current = setTimeout(() => api.saveNote(activeVideo.path, val), 500);
+      noteSaveTimeout.current = setTimeout(async () => {
+        await api.saveNote(targetPath, val);
+        setIsNoteDirty(false); // Reset dirty flag upon successful flush!
+      }, 750);
+    }
+  };
+
+  const handleExplicitSaveNote = async () => {
+    const targetPath = noteVideoPath || activeVideo?.path;
+    if (!targetPath) return;
+    
+    if (noteSaveTimeout.current) clearTimeout(noteSaveTimeout.current);
+    await api.saveNote(targetPath, videoNote);
+    setIsNoteDirty(false);
+    
+    // If there is a pending video stashed due to locking, transition it instantly!
+    const nextVideo = pendingNoteVideo || activeVideo;
+    if (nextVideo && nextVideo.path !== targetPath) {
+      setNoteVideoPath(nextVideo.path);
+      setPendingNoteVideo(null);
+      const freshText = await api.getNote(nextVideo.path);
+      setVideoNote(freshText || '');
     }
   };
 
@@ -692,8 +932,10 @@ function App() {
                 <button className="header-icon-btn back-dashboard" onClick={() => setViewMode('dashboard')} title="Back to Dashboard">
                   <ChevronLeft size={18} />
                 </button>
-                <div className="app-logo"><Book size={18} fill="currentColor"/></div>
-                <h1 style={{ fontSize: '0.9rem', fontWeight: '700', letterSpacing: '0.5px' }}>Study Player</h1>
+                <div className="app-logo" style={{ width: '22px', height: '22px', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                  <img src="/thumb.png" alt="StudyFlux Logo" style={{ width: '100%', height: '100%', objectFit: 'contain', borderRadius: '5px' }} />
+                </div>
+                <h1 style={{ fontSize: '0.9rem', fontWeight: '700', letterSpacing: '0.5px' }}>StudyFlux</h1>
               </>
             ) : (
               <>
@@ -702,10 +944,10 @@ function App() {
                     <ChevronLeft size={18} />
                   </button>
                 )}
-                <div className="app-logo" style={{ backgroundColor: 'var(--accent-color)', borderRadius: '6px', width: '26px', height: '26px', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white', flexShrink: 0 }}>
-                  <Book size={14} fill="currentColor"/>
+                <div className="app-logo" style={{ width: '26px', height: '26px', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                  <img src="/thumb.png" alt="StudyFlux Logo" style={{ width: '100%', height: '100%', objectFit: 'contain', borderRadius: '6px' }} />
                 </div>
-                <h1 style={{ fontSize: '0.95rem', fontWeight: '700', letterSpacing: '0.5px', margin: 0, cursor: 'pointer', color: 'var(--text-main)' }} onClick={() => setActiveDbTab('home')}>Study Player</h1>
+                <h1 style={{ fontSize: '0.95rem', fontWeight: '700', letterSpacing: '0.5px', margin: 0, cursor: 'pointer', color: 'var(--text-main)' }} onClick={() => setActiveDbTab('home')}>StudyFlux</h1>
               </>
             )}
           </div>
@@ -769,10 +1011,10 @@ function App() {
                       <h3>Open Workspace</h3>
                       <p>Restore session State</p>
                     </div>
-                    <div className="action-card neon" onClick={() => { setViewMode('player'); setShowSidebar(true); setSidebarTab('notes'); }}>
+                    <div className="action-card neon" onClick={() => { setActiveDbTab('notes'); }}>
                       <div className="card-icon"><FileText size={28} /></div>
-                      <h3>New Notes Session</h3>
-                      <p>Access local notepad</p>
+                      <h3>Note Session</h3>
+                      <p>Manage compiled memos</p>
                     </div>
                   </div>
 
@@ -857,12 +1099,101 @@ function App() {
               )}
 
               {activeDbTab === 'notes' && (
-                <div className="recent-workspaces-section" style={{ display: 'flex', flexDirection: 'column', flex: 1 }}>
-                  <div className="recent-header" style={{ fontSize: '1.2rem', marginBottom: '24px', gap: '10px' }}><FileText size={20} /> Consolidated Saved Notes</div>
-                  <div className="empty-state" style={{ background: 'var(--bg-dashboard-card)', border: '1px solid var(--border-color)', borderRadius: '10px', padding: '40px' }}>
-                    <FileText size={36} style={{ opacity: 0.3, marginBottom: '12px' }}/>
-                    <span style={{ color: 'var(--text-secondary)' }}>No indexed notes files discovered. Start writing timestamped logs in an active workspace session to populate!</span>
-                  </div>
+                <div className="recent-workspaces-section" style={{ display: 'flex', flexDirection: 'column', flex: 1, maxWidth: '680px', margin: '0 auto', width: '100%' }}>
+                  <div className="recent-header" style={{ fontSize: '1.2rem', marginBottom: '24px', gap: '10px' }}><FileText size={20} /> Note Session Tree</div>
+                  
+                  {Object.keys(notesTree).length === 0 ? (
+                    <div className="empty-state" style={{ background: 'var(--bg-dashboard-card)', border: '1px solid var(--border-color)', borderRadius: '10px', padding: '40px' }}>
+                      <FileText size={36} style={{ opacity: 0.3, marginBottom: '12px' }}/>
+                      <span style={{ color: 'var(--text-secondary)' }}>No indexed notes files discovered. Start writing timestamped logs in an active workspace session to populate!</span>
+                    </div>
+                  ) : (
+                    <div className="notes-tree-container" style={{ display: 'flex', flexDirection: 'column', gap: '16px', overflowY: 'auto', paddingRight: '4px' }}>
+                      {Object.keys(notesTree).map(courseName => {
+                        const notes = notesTree[courseName];
+                        const isCourseExpanded = expandedNotes[courseName];
+                        
+                        // Group notes nested in this course by their containing subfolders (modules)!
+                        const groups = {};
+                        for (const n of notes) {
+                          const rel = n.videoPath.replace(n.coursePath, '');
+                          const parts = rel.split(/[/\\]/).filter(Boolean);
+                          const modName = parts.length > 1 ? parts[parts.length - 2] : 'Root Content';
+                          
+                          if (!groups[modName]) groups[modName] = [];
+                          groups[modName].push(n);
+                        }
+                        
+                        return (
+                          <div key={courseName} className="course-note-node" style={{ background: 'var(--bg-dashboard-card)', borderRadius: '10px', border: '1px solid var(--border-color)', overflow: 'hidden' }}>
+                            <div 
+                              className="course-note-header" 
+                              onClick={() => setExpandedNotes(prev => ({ ...prev, [courseName]: !prev[courseName] }))}
+                              style={{ padding: '16px 20px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '12px', transition: 'background 0.2s', userSelect: 'none' }}
+                              onMouseEnter={(e) => e.currentTarget.style.background = 'var(--bg-hover)'}
+                              onMouseLeave={(e) => e.currentTarget.style.background = 'none'}
+                            >
+                              <FolderOpen size={20} style={{ color: '#e1b12c' }} />
+                              <span style={{ flex: 1, fontWeight: 600, color: 'var(--text-main)', fontSize: '0.95rem' }}>{courseName}</span>
+                              <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', background: 'rgba(255,255,255,0.05)', padding: '2px 8px', borderRadius: '12px', border: '1px solid var(--border-color)' }}>{notes.length} Recorded Node{notes.length > 1 ? 's' : ''}</span>
+                              {isCourseExpanded ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+                            </div>
+                            
+                            {isCourseExpanded && (
+                              <div className="course-note-body" style={{ padding: '0px 20px 20px 20px', display: 'flex', flexDirection: 'column', gap: '16px', borderTop: '1px solid var(--border-color)', paddingTop: '16px' }}>
+                                {Object.keys(groups).map(modName => (
+                                  <div key={modName} className="module-note-subnode" style={{ borderLeft: '2px solid rgba(255,255,255,0.1)', paddingLeft: '16px', marginLeft: '8px' }}>
+                                    <div style={{ color: 'var(--text-dim)', fontWeight: 600, fontSize: '0.72rem', textTransform: 'uppercase', letterSpacing: '0.8px', marginBottom: '10px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                      <Layers size={12} /> {modName}
+                                    </div>
+                                    
+                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                                      {groups[modName].map((n, idx) => (
+                                        <div 
+                                          key={idx} 
+                                          onClick={() => handleLoadCoursePath(n.coursePath, n.videoPath)}
+                                          style={{ 
+                                            background: 'var(--bg-main)', 
+                                            border: '1px solid var(--border-color)', 
+                                            borderRadius: '6px', 
+                                            padding: '12px 16px', 
+                                            cursor: 'pointer', 
+                                            transition: 'all 0.2s ease' 
+                                          }}
+                                          onMouseEnter={(e) => {
+                                            e.currentTarget.style.transform = 'translateX(4px)';
+                                            e.currentTarget.style.borderColor = 'var(--accent-hover)';
+                                            e.currentTarget.style.background = 'rgba(255,255,255,0.02)';
+                                          }}
+                                          onMouseLeave={(e) => {
+                                            e.currentTarget.style.transform = 'translateX(0)';
+                                            e.currentTarget.style.borderColor = 'var(--border-color)';
+                                            e.currentTarget.style.background = 'var(--bg-main)';
+                                          }}
+                                        >
+                                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
+                                            <span style={{ color: 'var(--text-main)', fontWeight: 500, fontSize: '0.82rem', display: 'inline-flex', alignItems: 'center', gap: '8px' }}>
+                                              <PlayCircle size={14} style={{ color: 'var(--accent-color)' }} /> {n.videoName}
+                                            </span>
+                                            <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '0.65rem', color: 'var(--accent-color)', fontWeight: 600, opacity: 0.8 }}>
+                                              LOAD <ExternalLink size={10} />
+                                            </span>
+                                          </div>
+                                          <div style={{ color: 'var(--text-secondary)', fontSize: '0.75rem', fontStyle: 'italic', whiteSpace: 'nowrap', textOverflow: 'ellipsis', overflow: 'hidden', opacity: 0.8 }}>
+                                            "{n.snippet}"
+                                          </div>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
                 </div>
               )}
 
@@ -906,8 +1237,8 @@ function App() {
                               {isCollapsed[modName] && (
                                 <div className="video-list">
                                   {videos.map((v) => {
-                                    const isActive = activeVideo?.path === v.path;
-                                    const flatIdx = flatList.findIndex(x => x.path === v.path);
+                                    const isActive = activeVideo?.path?.normalize() === v.path.normalize();
+                                    const flatIdx = flatList.findIndex(x => x.path.normalize() === v.path.normalize());
                                     
                                     // State from structured mapping
                                     const progressObj = videoCompletionMap[v.path];
@@ -983,8 +1314,34 @@ function App() {
                         <div className="notes-panel">
                           {activeVideo ? (
                             <>
-                              <div className="notes-meta-header"><span className="panel-caption">Notebook</span><span className="autosave-indicator">Live Auto-saving</span></div>
-                              <div className="notes-video-title truncate">{activeVideo.name}</div>
+                              <div className="notes-meta-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                <span className="panel-caption">Notebook</span>
+                                {pendingNoteVideo ? (
+                                  <button 
+                                    onClick={handleExplicitSaveNote} 
+                                    className="action-btn run" 
+                                    title="Click to Save your current notes and switch to next video session!"
+                                    style={{ 
+                                      padding: '2px 8px', 
+                                      fontSize: '0.7rem', 
+                                      display: 'inline-flex', 
+                                      alignItems: 'center', 
+                                      gap: '4px', 
+                                      borderRadius: '4px',
+                                      background: 'var(--accent-color)', 
+                                      boxShadow: '0 0 8px var(--accent-color)',
+                                      cursor: 'pointer'
+                                    }}
+                                  >
+                                    <Bookmark size={12} fill="currentColor"/> Save Notes
+                                  </button>
+                                ) : (
+                                  <span className="autosave-indicator">Live Auto-saving</span>
+                                )}
+                              </div>
+                              <div className="notes-video-title truncate" style={{ opacity: pendingNoteVideo ? 0.75 : 1 }}>
+                                {pendingNoteVideo ? `Writing for: ${noteVideoPath.split(/[/\\]/).pop()}` : activeVideo.name}
+                              </div>
                               <textarea className="notes-textarea" placeholder="Insights..." value={videoNote} onChange={(e) => handleNoteChange(e.target.value)} />
                             </>
                           ) : <div className="empty-state">Write.</div>}
@@ -1049,11 +1406,36 @@ function App() {
                         <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--accent-hover)', fontWeight: 600, fontSize: '0.8rem' }}>
                           <Tv size={15} /> <span>PiP Mode: Active Section Workspace</span>
                         </div>
-                        <button className="action-btn run" style={{ padding: '2px 10px', fontSize: '0.7rem', borderRadius: '4px' }} onClick={() => document.exitPictureInPicture().catch(() => {})}>Return Video</button>
+                        <div style={{ display: 'flex', gap: '8px' }}>
+                          {pendingNoteVideo && (
+                            <button 
+                              className="action-btn run" 
+                              onClick={handleExplicitSaveNote} 
+                              style={{ 
+                                padding: '2px 10px', 
+                                fontSize: '0.7rem', 
+                                borderRadius: '4px', 
+                                background: 'var(--accent-color)', 
+                                boxShadow: '0 0 8px var(--accent-color)',
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: '4px',
+                                cursor: 'pointer'
+                              }}
+                            >
+                              <Bookmark size={11} fill="currentColor"/> Save Workspace Notes
+                            </button>
+                          )}
+                          <button className="action-btn run" style={{ padding: '2px 10px', fontSize: '0.7rem', borderRadius: '4px' }} onClick={() => document.exitPictureInPicture().catch(() => {})}>Return Video</button>
+                        </div>
                       </div>
                       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                        <h3 style={{ color: 'var(--text-main)', fontSize: '0.9rem', fontWeight: 600, margin: 0 }}>{activeVideo.name}</h3>
-                        <p style={{ color: 'var(--text-dim)', fontSize: '0.72rem', margin: '0 0 4px 0' }}>Visual feed is floating. You can type comprehensive lesson memos in this container space:</p>
+                        <h3 style={{ color: 'var(--text-main)', fontSize: '0.9rem', fontWeight: 600, margin: 0 }}>
+                          {pendingNoteVideo ? `Writing Session: ${noteVideoPath.split(/[/\\]/).pop()}` : activeVideo.name}
+                        </h3>
+                        <p style={{ color: 'var(--text-dim)', fontSize: '0.72rem', margin: '0 0 4px 0' }}>
+                          {pendingNoteVideo ? "⚠️ Switch to next session's notes is blocked until you save." : "Visual feed is floating. You can type comprehensive lesson memos in this container space:"}
+                        </p>
                         <textarea 
                           className="notes-textarea"
                           placeholder="Write quick markdown insights or paste code outputs here..."
@@ -1076,36 +1458,69 @@ function App() {
                         <div className="timeline-filled" style={{ width: `${(currentTime / (duration || 1)) * 100}%` }}><div className="timeline-handle"></div></div>
                       </div>
                       <div className="control-row">
-                        <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
-                          <button onClick={() => videoRef.current?.paused ? videoRef.current.play() : videoRef.current?.pause()}>{isPlaying ? <Pause size={15} fill="currentColor"/> : <Play size={15} fill="currentColor"/>}</button>
-                          <button title="Rewind 10s" onClick={handleSeekBackward10}><SkipBack size={14} /></button>
-                          <button title="Fast-Forward 10s" onClick={handleSeekForward10}><SkipForward size={14} /></button>
-                          <span className="timestamp">{formatTime(currentTime)} / {formatTime(duration)}</span>
+                        <div style={{ display: 'flex', gap: '16px', alignItems: 'center' }}>
+                          <button onClick={() => videoRef.current?.paused ? videoRef.current.play() : videoRef.current?.pause()} style={{ background: 'none', border: 'none', display: 'inline-flex', padding: 0, cursor: 'pointer' }}>
+                            {isPlaying ? <Pause size={16} fill="currentColor"/> : <Play size={16} fill="currentColor"/>}
+                          </button>
                           
+                          <button title="Rewind 10s" onClick={handleSeekBackward10} style={{ background: 'none', border: 'none', display: 'inline-flex', padding: 0, cursor: 'pointer', opacity: 0.85 }}>
+                            <RotateCcw size={16} />
+                          </button>
+                          
+                          <button title="Fast-Forward 10s" onClick={handleSeekForward10} style={{ background: 'none', border: 'none', display: 'inline-flex', padding: 0, cursor: 'pointer', opacity: 0.85 }}>
+                            <RotateCw size={16} />
+                          </button>
+
+                          <span className="timestamp" style={{ marginLeft: '4px', fontSize: '0.75rem', opacity: 0.9, letterSpacing: '0.2px' }}>
+                            {formatTime(currentTime)} / {formatTime(duration)}
+                          </span>
+                        </div>
+                        
+                        <div style={{ display: 'flex', gap: '16px', alignItems: 'center' }}>
+                          <button title="Mute Toggle" onClick={() => { if(videoRef.current) videoRef.current.muted = !videoRef.current.muted; }} style={{ background: 'none', border: 'none', display: 'inline-flex', padding: 0, cursor: 'pointer' }}>
+                            <Volume2 size={16} />
+                          </button>
+
                           <button 
                             onClick={cyclePlaybackRate}
-                            title="Cycle playback speed"
+                            title="Playback Speed"
                             style={{ 
-                              background: 'rgba(0,0,0,0.6)', 
-                              border: '1px solid rgba(255,255,255,0.2)', 
-                              color: 'white', 
+                              background: 'rgba(255,255,255,0.1)', 
+                              border: 'none', 
+                              color: 'var(--text-main)', 
                               borderRadius: '4px', 
                               fontSize: '0.7rem', 
-                              padding: '2px 8px', 
+                              padding: '3px 8px', 
                               cursor: 'pointer', 
                               fontWeight: '600',
                               display: 'inline-flex',
                               alignItems: 'center'
                             }}
                           >
-                            {playbackRate}x
+                            {playbackRate.toFixed(1)}x
                           </button>
-                        </div>
-                        <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
-                          <button title="Floating Picture-in-Picture" onClick={() => videoRef.current?.requestPictureInPicture()} style={{ background: 'none', border: 'none', color: 'inherit', display: 'inline-flex' }}>
-                            <Tv size={14} />
+
+                          <button 
+                            title="Floating PiP Mode" 
+                            onClick={() => {
+                              if (document.pictureInPictureElement) {
+                                document.exitPictureInPicture().catch(console.error);
+                              } else {
+                                videoRef.current?.requestPictureInPicture().catch(console.error);
+                              }
+                            }} 
+                            style={{ background: 'none', border: 'none', display: 'inline-flex', padding: 0, cursor: 'pointer' }}
+                          >
+                            <Tv size={16} />
                           </button>
-                          <Volume2 size={14} /><Maximize size={14} onClick={() => videoRef.current?.requestFullscreen()} />
+
+                          <button title="Video Settings" onClick={() => alert("Codec: H.264 / AVC1\nHardware Acceleration: Enabled")} style={{ background: 'none', border: 'none', display: 'inline-flex', padding: 0, cursor: 'pointer' }}>
+                            <Settings size={16} />
+                          </button>
+
+                          <button title="Fullscreen" onClick={() => videoRef.current?.requestFullscreen()} style={{ background: 'none', border: 'none', display: 'inline-flex', padding: 0, cursor: 'pointer' }}>
+                            <Maximize size={16} />
+                          </button>
                         </div>
                       </div>
                     </div>
@@ -1160,7 +1575,7 @@ function App() {
                       {/* RHS: Stylized "Add File" and "Run" (Fulfills "add file button on rhs") */}
                       <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
                         <button className="header-util-btn action-add-file" onClick={handleAddNewFile} title="Create New File Tab">
-                          <Plus size={12} /> Add File
+                          <Plus size={12} /> Add
                         </button>
                         <button onClick={handleExecuteCode} disabled={isRunning} className="action-btn run">
                           {isRunning ? <Loader2 className="animate-spin" size={11} /> : <Play size={11} fill="currentColor" />} Run
