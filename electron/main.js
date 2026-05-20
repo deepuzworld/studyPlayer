@@ -82,6 +82,20 @@ app.whenReady().then(() => {
       const url = new URL(request.url);
       // Skip leading '/' from pathname to retrieve absolute path encoded in preload
       const filePath = decodeURIComponent(url.pathname.slice(1));
+
+      // Security Validation: Ensure file has a valid media extension
+      const validExts = ['.mp4', '.mkv', '.avi', '.webm', '.mov'];
+      const ext = path.extname(filePath).toLowerCase();
+
+      if (!validExts.includes(ext)) {
+        return new Response('Unauthorized: Invalid file type', { status: 403 });
+      }
+
+      // Security Validation: Prevent directory traversal (redundant with net.fetch but good practice)
+      if (filePath.includes('..')) {
+         return new Response('Unauthorized: Path traversal detected', { status: 403 });
+      }
+
       const fileUrl = pathToFileURL(filePath).toString();
       
       return net.fetch(fileUrl, {

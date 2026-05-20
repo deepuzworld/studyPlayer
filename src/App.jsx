@@ -112,7 +112,7 @@ const simulationApi = {
       currentTime: data.currentTime,
       duration: data.duration,
       lastWatched: Date.now(),
-      completed: data.completed || (data.duration > 0 && (data.currentTime / data.duration > 0.95))
+      completed: data.completed || (data.duration > 0 && (data.currentTime / data.duration > 0.90))
     }));
     return true;
   },
@@ -477,7 +477,7 @@ function App() {
     }
     
     if (dur > 0) {
-      const isComp = forceCompleted || (cur / dur > 0.95);
+      const isComp = forceCompleted || (cur / dur > 0.90);
       api.updateProgress(activeVideo.path, Math.floor(cur * 1000), Math.floor(dur * 1000), isComp);
       
       // Save checkpoint to persistent playback session table immediately
@@ -511,7 +511,7 @@ function App() {
       const cur = videoRef.current.currentTime;
       const dur = videoRef.current.duration || 0;
       if (dur > 0) {
-        const isComp = (cur / dur > 0.95);
+        const isComp = (cur / dur > 0.90);
         await api.updateProgress(activeVideo.path, Math.floor(cur * 1000), Math.floor(dur * 1000), isComp);
         if (api.savePlayback) {
           console.log("SAVING:", cur);
@@ -551,7 +551,7 @@ function App() {
           path: activeVideo.path,
           currentTime: video.currentTime,
           duration: video.duration || 0,
-          completed: video.duration > 0 && (video.currentTime / video.duration > 0.95)
+          completed: video.duration > 0 && (video.currentTime / video.duration > 0.90)
         });
         if (res && res.catch) res.catch(() => {});
       } catch (e) {}
@@ -645,7 +645,7 @@ function App() {
             path: activeVideo.path,
             currentTime: time,
             duration: dur,
-            completed: time / dur > 0.95
+            completed: time / dur > 0.90
           });
           if (res && res.catch) res.catch(() => {});
         } catch (e) {}
@@ -671,7 +671,7 @@ function App() {
       lastProgressUpdateRef.current = curSec;
       saveCurrentProgressInstantly();
       
-      const comp = cur / dur > 0.95;
+      const comp = cur / dur > 0.90;
       if (comp && activeVideo.is_completed === 0) {
         setActiveVideo(prev => ({ ...prev, is_completed: 1 }));
       }

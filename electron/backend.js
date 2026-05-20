@@ -90,51 +90,41 @@ class BackendService {
     const validExts = ['.mp4', '.mkv', '.avi', '.webm', '.mov'];
     const ignoredDirs = ['node_modules', '.git', '.vscode', '.idea', 'dist', 'build', 'venv', 'env', '__pycache__', 'tmp', 'release', 'target'];
     const result = {};
-    const topLevelVideos = [];
+
+    const scan = async (currentPath, moduleName = null) => {
+      try {
+        const entries = await fs.promises.readdir(currentPath, { withFileTypes: true });
+        const sortedEntries = entries.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+        
+        const videos = [];
+
+        for (const entry of sortedEntries) {
+          const name = entry.name;
+          if (name.startsWith('.')) continue;
+          
+          const fullPath = path.join(currentPath, name);
+
+          if (entry.isDirectory()) {
+            if (ignoredDirs.includes(name.toLowerCase())) continue;
+            // Recursively scan subdirectories. Use the directory name as the module name if we're at the top level
+            await scan(fullPath, moduleName || name);
+          } else if (entry.isFile() && validExts.includes(path.extname(name).toLowerCase())) {
+            videos.push({ name: name, path: fullPath.normalize('NFC') });
+          }
+        }
+
+        if (videos.length > 0) {
+          const key = moduleName || "Module 1: General";
+          if (!result[key]) result[key] = [];
+          result[key].push(...videos);
+        }
+      } catch (e) {
+        console.warn(`Skipping problematic directory ${currentPath}:`, e.message);
+      }
+    };
 
     try {
-      // Async read without blocking the main thread, getting entry types automatically
-      const entries = await fs.promises.readdir(dirPath, { withFileTypes: true });
-      const sortedEntries = entries.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
-      
-      for (const entry of sortedEntries) {
-        const name = entry.name;
-        if (name.startsWith('.')) continue;
-        
-        const fullPath = path.join(dirPath, name);
-
-        if (entry.isDirectory()) {
-          // Prevent traversing into massive directories to conserve memory & CPU
-          if (ignoredDirs.includes(name.toLowerCase())) continue;
-          
-          try {
-            const subEntries = await fs.promises.readdir(fullPath, { withFileTypes: true });
-            const sortedSub = subEntries.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
-            const videos = [];
-            
-            for (const subEntry of sortedSub) {
-              if (subEntry.name.startsWith('.')) continue;
-              if (subEntry.isFile() && validExts.includes(path.extname(subEntry.name).toLowerCase())) {
-                const finalPath = path.join(fullPath, subEntry.name).normalize('NFC');
-                videos.push({ name: subEntry.name, path: finalPath });
-              }
-            }
-            
-            if (videos.length > 0) {
-              result[name] = videos;
-            }
-          } catch (subErr) {
-            console.warn(`Skipping problematic directory ${fullPath}:`, subErr.message);
-          }
-        } else if (entry.isFile() && validExts.includes(path.extname(name).toLowerCase())) {
-          topLevelVideos.push({ name: name, path: fullPath.normalize('NFC') });
-        }
-      }
-
-      if (topLevelVideos.length > 0) {
-        result["Module 1: General"] = topLevelVideos;
-      }
-
+      await scan(dirPath);
       return result;
     } catch (e) {
       console.error("Scanning failed", e);
@@ -255,14 +245,27 @@ class BackendService {
   // --- Code Runner ---
   runCode(code, filename, dirPath) {
     return new Promise((resolve, reject) => {
+      // Sanitize filename to prevent directory traversal or command injection via filename
+      const safeFilename = path.basename(filename);
+      const ext = path.extname(safeFilename).toLowerCase();
+      const allowedExts = ['.py', '.js', '.sh'];
+
+      if (!allowedExts.includes(ext)) {
+        return resolve({
+          success: false,
+          output: '',
+          error: 'Unsupported file extension. Only .py, .js, and .sh are allowed.'
+        });
+      }
+
       const destDir = dirPath && fs.existsSync(dirPath) ? dirPath : tmpdir();
-      const tmpFile = path.join(destDir, filename);
+      const tmpFile = path.join(destDir, safeFilename);
       fs.writeFileSync(tmpFile, code);
 
       let cmd = '';
-      const ext = path.extname(filename).toLowerCase();
       if (ext === '.py') cmd = `python3 "${tmpFile}"`;
       else if (ext === '.js') cmd = `node "${tmpFile}"`;
+      else if (ext === '.sh') cmd = `bash "${tmpFile}"`;
       else cmd = `bash "${tmpFile}"`;
 
       exec(cmd, { cwd: destDir }, (error, stdout, stderr) => {
@@ -278,8 +281,9 @@ class BackendService {
 
   saveCode(code, filename, dirPath) {
     try {
+      const safeFilename = path.basename(filename);
       const destDir = dirPath && fs.existsSync(dirPath) ? dirPath : tmpdir();
-      const filePath = path.join(destDir, filename);
+      const filePath = path.join(destDir, safeFilename);
       fs.writeFileSync(filePath, code);
       return { success: true, path: filePath };
     } catch (e) {
@@ -333,7 +337,7 @@ class BackendService {
   savePlayback(data) {
     try {
       const normPath = data.path.normalize('NFC');
-      const completed = data.completed ? 1 : (data.duration > 0 && (data.currentTime / data.duration > 0.95) ? 1 : 0);
+      const completed = data.completed ? 1 : (data.duration > 0 && (data.currentTime / data.duration > 0.90) ? 1 : 0);
       this.db.prepare(`
         INSERT INTO playback_history (
            video_path,
