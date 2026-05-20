@@ -50,14 +50,23 @@ function createWindow() {
 
   // Graceful shutdown delay to ensure persistent playback checkpoint flushes complete
   let isQuitting = false;
+  let closeTimeout;
   mainWindow.on('close', (e) => {
     if (!isQuitting) {
       e.preventDefault();
       mainWindow.webContents.send('force-save-playback');
-      setTimeout(() => {
+
+      // Wait for confirmation or timeout
+      ipcMain.once('playback-saved-confirm', () => {
+        if (closeTimeout) clearTimeout(closeTimeout);
         isQuitting = true;
-        mainWindow.close();
-      }, 400); // Take a small lag to securely store current video content time
+        if (mainWindow) mainWindow.close();
+      });
+
+      closeTimeout = setTimeout(() => {
+        isQuitting = true;
+        if (mainWindow) mainWindow.close();
+      }, 1000); // Max wait for renderer to flush DB
     }
   });
 
@@ -201,10 +210,6 @@ app.whenReady().then(() => {
   // Persistent Playback Session Handlers
   ipcMain.handle('save-playback', (event, data) => {
     return backend.savePlayback(data);
-  });
-
-  ipcMain.on('save-playback', (event, data) => {
-    backend.savePlayback(data);
   });
 
   ipcMain.handle('get-playback', (event, videoPath) => {

@@ -24,9 +24,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
   setSetting: (key, val) => ipcRenderer.invoke('set-setting', key, val),
   
   // Persistent Playback Checkpoint IPC API
-  savePlayback: (data) => ipcRenderer.send('save-playback', data),
+  savePlayback: (data) => ipcRenderer.invoke('save-playback', data),
   getPlayback: (path) => ipcRenderer.invoke('get-playback', path),
-  onForceSavePlayback: (callback) => ipcRenderer.on('force-save-playback', callback),
+  onForceSavePlayback: (callback) => {
+    const listener = (event, ...args) => callback(...args);
+    ipcRenderer.on('force-save-playback', listener);
+    return () => ipcRenderer.removeListener('force-save-playback', listener);
+  },
+  confirmPlaybackSaved: () => ipcRenderer.send('playback-saved-confirm'),
   
   // Helper for loading local video files via custom streaming protocol that supports buffering & seeking!
   getVideoSrc: (filePath) => `stream://local-file/${encodeURIComponent(filePath)}`,
