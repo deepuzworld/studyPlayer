@@ -174,6 +174,8 @@ function App() {
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
   const playbackSaveTimeout = useRef(null);
+  const restoredRef = useRef(false);
+  const restoredPathRef = useRef(null);
 
   // Multi-File Editor States
   const [openFiles, setOpenFiles] = useState([
@@ -289,19 +291,29 @@ function App() {
     const savedTime = (activeVideo.last_position_ms || 0) / 1000;
     video.playbackRate = playbackRate;
 
+    if (restoredPathRef.current !== activeVideo.path) {
+      restoredRef.current = false;
+      restoredPathRef.current = activeVideo.path;
+    }
+
     console.log("RESTORING:", savedTime);
 
     const restorePlayback = () => {
-      console.log("VIDEO READY");
-      if (savedTime > 5 && savedTime < video.duration) {
+      if (restoredRef.current) return;
+      console.log("VIDEO READY FOR RESTORE", video.readyState);
+
+      if (savedTime > 1 && savedTime < video.duration) {
         video.currentTime = savedTime;
       }
+
+      restoredRef.current = true;
       video.play().catch(() => {});
     };
 
     video.addEventListener("loadedmetadata", restorePlayback);
+    video.addEventListener("canplay", restorePlayback);
 
-    if (video.readyState >= 1) {
+    if (video.readyState >= 2) {
       restorePlayback();
     }
 
@@ -314,6 +326,7 @@ function App() {
 
     return () => {
       video.removeEventListener("loadedmetadata", restorePlayback);
+      video.removeEventListener("canplay", restorePlayback);
       video.removeEventListener('enterpictureinpicture', onEnter);
       video.removeEventListener('leavepictureinpicture', onLeave);
     };
@@ -465,8 +478,8 @@ function App() {
   };
 
   // Instant programmatic progress saver & mapper synchronization
-  const saveCurrentProgressInstantly = (forceCompleted = false) => {
-    if (!activeVideo || !videoRef.current) return;
+  const saveCurrentProgressInstantly = async (forceCompleted = false) => {
+    if (!activeVideo || !videoRef.current || !restoredRef.current) return;
     const cur = videoRef.current.currentTime;
     const dur = videoRef.current.duration || 0;
     
@@ -478,19 +491,18 @@ function App() {
     
     if (dur > 0) {
       const isComp = forceCompleted || (cur / dur > 0.95);
-      api.updateProgress(activeVideo.path, Math.floor(cur * 1000), Math.floor(dur * 1000), isComp);
+      await api.updateProgress(activeVideo.path, Math.floor(cur * 1000), Math.floor(dur * 1000), isComp);
       
       // Save checkpoint to persistent playback session table immediately
       if (api.savePlayback) {
         console.log("SAVING:", cur);
         try {
-          const res = api.savePlayback({
+          await api.savePlayback({
             path: activeVideo.path,
             currentTime: cur,
             duration: dur,
             completed: isComp
           });
-          if (res && res.catch) res.catch(() => {});
         } catch (e) {}
       }
       
@@ -507,7 +519,7 @@ function App() {
 
   // Absolute persistence guarantee triggered when clicking custom X close control
   const handleAppExit = async () => {
-    if (activeVideo && videoRef.current) {
+    if (activeVideo && videoRef.current && restoredRef.current) {
       const cur = videoRef.current.currentTime;
       const dur = videoRef.current.duration || 0;
       if (dur > 0) {
@@ -516,13 +528,12 @@ function App() {
         if (api.savePlayback) {
           console.log("SAVING:", cur);
           try {
-            const res = api.savePlayback({
+            await api.savePlayback({
               path: activeVideo.path,
               currentTime: cur,
               duration: dur,
               completed: isComp
             });
-            if (res && res.catch) await res.catch(() => {});
           } catch (e) {}
         }
       }
@@ -533,9 +544,13 @@ function App() {
   // Listen for force-save-playback event from Electron Main Process on app close/quit
   useEffect(() => {
     if (api.onForceSavePlayback) {
-      api.onForceSavePlayback(() => {
-        saveCurrentProgressInstantly();
+      const unsubscribe = api.onForceSavePlayback(async () => {
+        await saveCurrentProgressInstantly();
+        api.confirmPlaybackSaved();
       });
+      return () => {
+        if (unsubscribe) unsubscribe();
+      };
     }
   }, [activeVideo]);
 
@@ -544,16 +559,16 @@ function App() {
     const video = videoRef.current;
     if (!activeVideo || !video || !api.savePlayback) return;
 
-    const interval = setInterval(() => {
+    const interval = setInterval(async () => {
+      if (!restoredRef.current) return;
       console.log("SAVING:", video.currentTime);
       try {
-        const res = api.savePlayback({
+        await api.savePlayback({
           path: activeVideo.path,
           currentTime: video.currentTime,
           duration: video.duration || 0,
           completed: video.duration > 0 && (video.currentTime / video.duration > 0.95)
         });
-        if (res && res.catch) res.catch(() => {});
       } catch (e) {}
     }, 5000);
 
@@ -636,18 +651,18 @@ function App() {
 
   // Debounced Save System implementation
   const scheduleSave = (time, dur) => {
+    if (!restoredRef.current) return;
     if (playbackSaveTimeout.current) clearTimeout(playbackSaveTimeout.current);
-    playbackSaveTimeout.current = setTimeout(() => {
+    playbackSaveTimeout.current = setTimeout(async () => {
       if (api.savePlayback && activeVideo) {
         console.log("SAVING:", time);
         try {
-          const res = api.savePlayback({
+          await api.savePlayback({
             path: activeVideo.path,
             currentTime: time,
             duration: dur,
             completed: time / dur > 0.95
           });
-          if (res && res.catch) res.catch(() => {});
         } catch (e) {}
       }
     }, 5000);
@@ -1209,7 +1224,7 @@ function App() {
             {/* Sidebar Container (Conditional) */}
             {showSidebar && (
               <>
-                <aside className="sidebar" style={{ width: `${sidebarWidth}px`, flexShrink: 0 }}>
+                <aside key="sidebar-area" className="sidebar" style={{ width: `${sidebarWidth}px`, flexShrink: 0 }}>
                   <div className="glass-panel sidebar-main-container">
                     
                     <div className="tabs-header sidebar-unified-tabs">
@@ -1363,7 +1378,7 @@ function App() {
             )}
 
             {/* Main Player Stage */}
-            <section className="main-stage" style={{ flex: 1 }}>
+            <section key="player-stage-area" className="main-stage" style={{ flex: 1 }}>
               <div className="glass-panel player-wrapper" style={{ height: showRefPane ? `${mainSplit}%` : '100%' }} onContextMenu={handleContextMenu}>
                 <div className="panel-header compact">
                   <span className="truncate text-dim flex-1 ml-2">{activeVideo ? activeVideo.name : 'Focused Stage Ready'}</span>
